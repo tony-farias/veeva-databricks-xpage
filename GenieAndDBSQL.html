@@ -1,0 +1,1368 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Veeva CRM - Engagement Overview</title>
+    <!-- Veeva X-Pages Library Dependencies -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/q.js/1.5.1/q.min.js"></script>
+    <script src="https://crm-app-cdn.veeva-vcrm.com/x-pages/library/X-PagesLibrary.js"></script>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
+            background: #0d1b2a;
+            color: #e0e6ed;
+            height: 100vh;
+            overflow-x: hidden;
+        }
+
+        /* Profile Header */
+        .profile-header {
+            background: #1b2838;
+            padding: 1.5rem;
+            border-bottom: 1px solid #2a3a4e;
+        }
+
+        .profile-header-top {
+            display: flex;
+            justify-content: space-between;
+            align-items: flex-start;
+            margin-bottom: 1rem;
+        }
+
+        .last-updated {
+            color: #7a8ea0;
+            font-size: 0.85rem;
+        }
+
+        .profile-name-section {
+            display: flex;
+            align-items: center;
+            gap: 0.75rem;
+            margin-bottom: 1rem;
+        }
+
+        .profile-name {
+            font-size: 1.5rem;
+            font-weight: 600;
+            color: #ffffff;
+        }
+
+        .profile-details {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 1.5rem;
+            margin-bottom: 1rem;
+            font-size: 0.9rem;
+        }
+
+        .profile-detail-item {
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+        }
+
+        .profile-detail-label {
+            color: #666;
+        }
+
+        .profile-detail-value {
+            color: #333;
+            font-weight: 500;
+        }
+
+        .profile-actions {
+            display: flex;
+            gap: 1rem;
+            align-items: center;
+            flex-wrap: wrap;
+        }
+
+        .profile-action-link {
+            color: #5b9bd5;
+            text-decoration: none;
+            font-size: 0.9rem;
+            cursor: pointer;
+        }
+
+        .profile-action-link:hover {
+            text-decoration: underline;
+        }
+
+        /* Sub Navigation */
+        .sub-nav {
+            background: #1b2838;
+            border-bottom: 1px solid #2a3a4e;
+            padding: 0 1.5rem;
+        }
+
+        .sub-nav-tabs {
+            display: flex;
+            gap: 0;
+        }
+
+        .sub-nav-tab {
+            padding: 0.75rem 1.5rem;
+            background: none;
+            border: none;
+            border-bottom: 3px solid transparent;
+            cursor: pointer;
+            font-size: 0.9rem;
+            color: #7a8ea0;
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+            transition: all 0.2s;
+        }
+
+        .sub-nav-tab:hover {
+            color: #e0e6ed;
+            background: rgba(255,255,255,0.05);
+        }
+
+        .sub-nav-tab.active {
+            color: #5b9bd5;
+            border-bottom-color: #5b9bd5;
+            font-weight: 500;
+        }
+
+        /* Main Content */
+        .main-content {
+            padding: 1.5rem;
+            max-width: 1400px;
+            margin: 0 auto;
+        }
+
+        .content-grid {
+            display: grid;
+            grid-template-columns: 1fr 1fr 1fr;
+            gap: 1.5rem;
+        }
+
+        .content-card {
+            background: #1b2838;
+            border-radius: 8px;
+            padding: 1.5rem;
+            box-shadow: 0 1px 3px rgba(0,0,0,0.3);
+            border: 1px solid #2a3a4e;
+        }
+
+        .card-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 1rem;
+        }
+
+        .card-title {
+            font-size: 1.1rem;
+            font-weight: 600;
+            color: #ffffff;
+        }
+
+        .card-refresh {
+            font-size: 0.8rem;
+            color: #7a8ea0;
+        }
+
+        .card-content {
+            color: #b0bec5;
+            line-height: 1.6;
+        }
+
+        .card-content-item {
+            margin-bottom: 1rem;
+        }
+
+        .card-content-item:last-child {
+            margin-bottom: 0;
+        }
+
+        .card-content-label {
+            font-weight: 500;
+            color: #e0e6ed;
+            margin-bottom: 0.25rem;
+        }
+
+        .treatment-journey {
+            display: flex;
+            flex-direction: column;
+            gap: 1rem;
+        }
+
+        .treatment-item {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 0.75rem;
+            background: #0d1b2a;
+            border-radius: 6px;
+        }
+
+        .treatment-name {
+            font-weight: 500;
+            color: #e0e6ed;
+        }
+
+        .treatment-stage {
+            color: #5b9bd5;
+            font-size: 0.9rem;
+        }
+
+        .engagement-tips {
+            list-style: none;
+        }
+
+        .engagement-tips li {
+            padding: 0.5rem 0;
+            padding-left: 1.5rem;
+            position: relative;
+            color: #b0bec5;
+            line-height: 1.6;
+        }
+
+        .engagement-tips li:before {
+            content: "•";
+            position: absolute;
+            left: 0;
+            color: #5b9bd5;
+            font-weight: bold;
+        }
+
+        .chart-container {
+            display: flex;
+            align-items: center;
+            gap: 2rem;
+        }
+
+        .chart-legend {
+            display: flex;
+            flex-direction: column;
+            gap: 0.75rem;
+        }
+
+        .legend-item {
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+            font-size: 0.9rem;
+        }
+
+        .legend-color {
+            width: 12px;
+            height: 12px;
+            border-radius: 2px;
+        }
+
+        .legend-color.presenter { background: #4a90e2; }
+        .legend-color.panelist { background: #7b68ee; }
+        .legend-color.speaker { background: #50c878; }
+        .legend-color.award { background: #ff6b6b; }
+
+        .donut-chart {
+            width: 150px;
+            height: 150px;
+            border-radius: 50%;
+            background: conic-gradient(
+                #4a90e2 0deg 90deg,
+                #7b68ee 90deg 180deg,
+                #50c878 180deg 270deg,
+                #ff6b6b 270deg 360deg
+            );
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            position: relative;
+        }
+
+        .donut-chart-center {
+            width: 80px;
+            height: 80px;
+            background: #1b2838;
+            border-radius: 50%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-weight: 600;
+            color: #ffffff;
+        }
+
+        .chart-period {
+            margin-top: 0.5rem;
+            font-size: 0.8rem;
+            color: #7a8ea0;
+        }
+
+        /* Chatbot Popup */
+        .chatbot-trigger {
+            position: fixed;
+            bottom: 2rem;
+            right: 2rem;
+            width: 60px;
+            height: 60px;
+            background: #0066cc;
+            border-radius: 50%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            cursor: pointer;
+            box-shadow: 0 4px 12px rgba(0,0,0,0.15);
+            z-index: 1000;
+            transition: transform 0.2s;
+        }
+
+        .chatbot-trigger:hover {
+            transform: scale(1.1);
+        }
+
+        .chatbot-trigger svg {
+            width: 28px;
+            height: 28px;
+            fill: white;
+        }
+
+        .chatbot-popup {
+            position: fixed;
+            bottom: 90px;
+            right: 2rem;
+            width: 400px;
+            height: 600px;
+            background: #1b2838;
+            border-radius: 12px;
+            box-shadow: 0 8px 24px rgba(0,0,0,0.2);
+            display: none;
+            flex-direction: column;
+            z-index: 1001;
+            overflow: hidden;
+        }
+
+        .chatbot-popup.open {
+            display: flex;
+        }
+
+        .chatbot-header {
+            background: linear-gradient(135deg, #0066cc 0%, #0052a3 100%);
+            color: white;
+            padding: 1rem 1.5rem;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+
+        .chatbot-header h2 {
+            font-size: 1.1rem;
+            font-weight: 600;
+        }
+
+        .chatbot-close {
+            background: none;
+            border: none;
+            color: white;
+            font-size: 1.5rem;
+            cursor: pointer;
+            padding: 0;
+            width: 24px;
+            height: 24px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            border-radius: 4px;
+        }
+
+        .chatbot-close:hover {
+            background: rgba(255,255,255,0.2);
+        }
+
+        .chatbot-messages {
+            flex: 1;
+            overflow-y: auto;
+            padding: 1rem;
+            background: #0d1b2a;
+            display: flex;
+            flex-direction: column;
+            gap: 0.75rem;
+        }
+
+        .chatbot-message {
+            display: flex;
+            margin-bottom: 0.5rem;
+            animation: fadeIn 0.3s ease-in;
+        }
+
+        @keyframes fadeIn {
+            from {
+                opacity: 0;
+                transform: translateY(10px);
+            }
+            to {
+                opacity: 1;
+                transform: translateY(0);
+            }
+        }
+
+        .chatbot-message.user {
+            justify-content: flex-end;
+        }
+
+        .chatbot-message.assistant {
+            justify-content: flex-start;
+        }
+
+        .chatbot-message-bubble {
+            max-width: 80%;
+            padding: 0.6rem 0.9rem;
+            border-radius: 1rem;
+            word-wrap: break-word;
+            line-height: 1.6;
+            font-size: 0.9rem;
+        }
+
+        .chatbot-message-bubble a {
+            color: #0066cc;
+            text-decoration: underline;
+        }
+
+        .chatbot-message-bubble a:hover {
+            color: #0052a3;
+        }
+
+        .chatbot-message-bubble strong {
+            font-weight: 600;
+        }
+
+        .chatbot-message.user .chatbot-message-bubble {
+            background: #0066cc;
+            color: white;
+            border-bottom-right-radius: 0.25rem;
+        }
+
+        .chatbot-message.assistant .chatbot-message-bubble {
+            background: #1b2838;
+            color: #e0e6ed;
+            border: 1px solid #2a3a4e;
+            border-bottom-left-radius: 0.25rem;
+            box-shadow: 0 1px 2px rgba(0,0,0,0.2);
+        }
+
+        .chatbot-input-container {
+            padding: 1rem;
+            background: #1b2838;
+            border-top: 1px solid #2a3a4e;
+            display: flex;
+            gap: 0.5rem;
+            align-items: center;
+        }
+
+        .chatbot-input {
+            flex: 1;
+            padding: 0.6rem 0.9rem;
+            border: 1px solid #2a3a4e;
+            border-radius: 1.5rem;
+            font-size: 0.9rem;
+            outline: none;
+            transition: border-color 0.2s;
+            background: #0d1b2a;
+            color: #e0e6ed;
+        }
+
+        .chatbot-input:focus {
+            border-color: #5b9bd5;
+        }
+
+        .chatbot-send-button {
+            padding: 0.6rem 1.2rem;
+            background: #0066cc;
+            color: white;
+            border: none;
+            border-radius: 1.5rem;
+            font-size: 0.9rem;
+            font-weight: 500;
+            cursor: pointer;
+            transition: background 0.2s;
+        }
+
+        .chatbot-send-button:hover:not(:disabled) {
+            background: #0052a3;
+        }
+
+        .chatbot-send-button:disabled {
+            background: #ccc;
+            cursor: not-allowed;
+        }
+
+        .chatbot-loading {
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+            color: #666;
+            font-style: italic;
+            font-size: 0.85rem;
+        }
+
+        .chatbot-loading-dots {
+            display: inline-flex;
+            gap: 0.25rem;
+        }
+
+        .chatbot-loading-dot {
+            width: 5px;
+            height: 5px;
+            border-radius: 50%;
+            background: #999;
+            animation: bounce 1.4s infinite ease-in-out both;
+        }
+
+        .chatbot-loading-dot:nth-child(1) {
+            animation-delay: -0.32s;
+        }
+
+        .chatbot-loading-dot:nth-child(2) {
+            animation-delay: -0.16s;
+        }
+
+        @keyframes bounce {
+            0%, 80%, 100% {
+                transform: scale(0);
+            }
+            40% {
+                transform: scale(1);
+            }
+        }
+
+        .chatbot-empty-state {
+            text-align: center;
+            color: #7a8ea0;
+            padding: 2rem 1rem;
+            margin: auto;
+            font-size: 0.9rem;
+        }
+
+        .chatbot-suggestions {
+            padding: 1rem;
+            display: flex;
+            flex-direction: column;
+            gap: 0.75rem;
+            margin-top: 0.5rem;
+        }
+
+        .chatbot-suggestions-title {
+            font-size: 0.85rem;
+            color: #7a8ea0;
+            margin-bottom: 0.5rem;
+            font-weight: 500;
+        }
+
+        .chatbot-suggestion-button {
+            background: #1b2838;
+            border: 1px solid #2a3a4e;
+            border-radius: 8px;
+            padding: 0.75rem 1rem;
+            text-align: left;
+            cursor: pointer;
+            font-size: 0.85rem;
+            color: #b0bec5;
+            transition: all 0.2s;
+            line-height: 1.4;
+            word-wrap: break-word;
+            white-space: normal;
+        }
+
+        .chatbot-suggestion-button:hover {
+            background: #162436;
+            border-color: #5b9bd5;
+            color: #5b9bd5;
+        }
+
+        .chatbot-suggestion-button:active {
+            transform: scale(0.98);
+        }
+
+        .chatbot-suggestion {
+            margin-top: 0.5rem;
+            padding: 0.5rem;
+            background: #f0f7ff;
+            border-left: 3px solid #0066cc;
+            border-radius: 0.25rem;
+            font-size: 0.85rem;
+            color: #0066cc;
+        }
+
+        .chatbot-messages::-webkit-scrollbar {
+            width: 6px;
+        }
+
+        .chatbot-messages::-webkit-scrollbar-track {
+            background: #f1f1f1;
+        }
+
+        .chatbot-messages::-webkit-scrollbar-thumb {
+            background: #ccc;
+            border-radius: 3px;
+        }
+
+        .chatbot-messages::-webkit-scrollbar-thumb:hover {
+            background: #999;
+        }
+
+        @media (max-width: 1024px) {
+            .content-grid {
+                grid-template-columns: 1fr;
+            }
+
+            .chatbot-popup {
+                width: 90vw;
+                max-width: 400px;
+                height: 70vh;
+                bottom: 90px;
+                right: 5vw;
+            }
+        }
+    </style>
+</head>
+<body>
+    <!-- Profile Header -->
+    <div class="profile-header">
+        <div class="profile-header-top">
+            <div class="last-updated">Last updated on Apr 01, 2025</div>
+            <div>
+                <a href="#" class="profile-action-link">Share your feedback</a>
+                <span style="margin-left: 0.5rem;">ℹ️</span>
+            </div>
+        </div>
+        <div class="profile-name-section">
+            <span>👤</span>
+            <h1 class="profile-name" id="physicianName">Loading...</h1>
+        </div>
+        <div class="profile-details">
+            <div class="profile-detail-item">
+                <span class="profile-detail-label">Engagement Prioritization:</span>
+                <span class="profile-detail-value" style="color:#5b9bd5;">High P2P Need (4X)</span>
+            </div>
+        </div>
+    </div>
+
+    <!-- Sub Navigation -->
+    <div class="sub-nav">
+        <div class="sub-nav-tabs">
+            <button class="sub-nav-tab active">
+                📄 Engagement Overview
+            </button>
+        </div>
+    </div>
+
+    <!-- Main Content -->
+    <div class="main-content">
+        <div class="content-grid">
+                <!-- Recent Scientific Engagement Summary -->
+                <div class="content-card">
+                    <div class="card-header">
+                        <h3 class="card-title">Recent Scientific Engagement Summary</h3>
+                        <div class="card-refresh">Last refreshed on Aug 01, 2025</div>
+                    </div>
+                    <div class="card-content">
+                        <div class="card-content-item">
+                            <div class="card-content-label">Last Interaction Date:</div>
+                            <div>Jan 15, 2025</div>
+                        </div>
+                        <div class="card-content-item">
+                            <div class="card-content-label">Mode of Interaction:</div>
+                            <div>Virtual meeting via Microsoft Teams</div>
+                        </div>
+                        <div class="card-content-item">
+                            <div class="card-content-label">Topic Discussed:</div>
+                            <div>Zynthari's role in improving adherence among chronic pain patients</div>
+                        </div>
+                        <div class="card-content-item">
+                            <div class="card-content-label">Outcome:</div>
+                            <div>Expressed interest in real-world adherence data and asked for updates for upcoming clinical trials for extended-release therapies.</div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Next Best Actions (loaded from DBSQL) -->
+                <div class="content-card">
+                    <div class="card-header">
+                        <h3 class="card-title">Next Best Actions</h3>
+                        <div class="card-refresh" id="nbaRefresh">Loading...</div>
+                    </div>
+                    <ul class="engagement-tips" id="nbaList">
+                        <li style="color:#7a8ea0;">Loading actions from Databricks...</li>
+                    </ul>
+                </div>
+
+                <!-- Speaker Positions Chart -->
+                <div class="content-card">
+                    <div class="card-header">
+                        <h3 class="card-title">Speaker Positions</h3>
+                        <div class="card-refresh">Last refreshed on Aug 01, 2025</div>
+                    </div>
+                    <div class="chart-container">
+                        <div class="chart-legend">
+                            <div class="legend-item">
+                                <div class="legend-color presenter"></div>
+                                <span>Presenter: 31</span>
+                            </div>
+                            <div class="legend-item">
+                                <div class="legend-color panelist"></div>
+                                <span>Panelist: 28</span>
+                            </div>
+                            <div class="legend-item">
+                                <div class="legend-color speaker"></div>
+                                <span>Speaker: 34</span>
+                            </div>
+                            <div class="legend-item">
+                                <div class="legend-color award"></div>
+                                <span>Award Winner: 30</span>
+                            </div>
+                        </div>
+                        <div class="donut-chart">
+                            <div class="donut-chart-center">Total<br>123</div>
+                        </div>
+                    </div>
+                    <div class="chart-period">Data Period: Rolling 12 months</div>
+                </div>
+        </div>
+    </div>
+
+    <!-- Chatbot Trigger Button -->
+    <div class="chatbot-trigger" id="chatbotTrigger">
+        <svg viewBox="0 0 24 24">
+            <path d="M20 2H4c-1.1 0-2 .9-2 2v18l4-4h14c1.1 0 2-.9 2-2V4c0-1.1-.9-2-2-2zm0 14H6l-2 2V4h16v12z"/>
+        </svg>
+        </div>
+        
+    <!-- Chatbot Popup -->
+    <div class="chatbot-popup" id="chatbotPopup">
+        <div class="chatbot-header">
+            <h2>💬 Databricks AI Assistant</h2>
+            <button class="chatbot-close" id="chatbotClose">×</button>
+        </div>
+        <div class="chatbot-messages" id="chatbotMessages">
+            <div class="chatbot-empty-state">
+                <p>👋 Welcome! Start a conversation by typing a message below.</p>
+            </div>
+            <div class="chatbot-suggestions" id="chatbotSuggestions">
+                <div class="chatbot-suggestions-title">💡 Suggested questions:</div>
+                <button class="chatbot-suggestion-button" data-question="Which HCPs in my territory have similar engagement profiles to Dr Halstead?">
+                    Which HCPs in my territory have similar engagement profiles to Dr Halstead?
+                </button>
+                <button class="chatbot-suggestion-button" data-question="Which approved resources are commonly shared for the Treatment Journey Stages per brand?">
+                    Which approved resources are commonly shared for the Treatment Journey Stages per brand?
+                </button>
+                <button class="chatbot-suggestion-button" data-question="Draft compelling follow up emails, based on the engagement tips.">
+                    Draft compelling follow up emails, based on the engagement tips.
+                </button>
+            </div>
+        </div>
+        <div class="chatbot-input-container">
+            <input 
+                type="text" 
+                class="chatbot-input" 
+                id="chatbotInput" 
+                placeholder="Type your message here..."
+                autocomplete="off"
+            />
+            <button class="chatbot-send-button" id="chatbotSendButton">Send</button>
+        </div>
+    </div>
+
+    <script>
+        // =============================================================
+        // Configuration
+        // =============================================================
+        const CONFIG = {
+            // Databricks Workspace
+            DATABRICKS_HOST: new URLSearchParams(window.location.search).get('host') ||
+                             'https://fevm-serverless-stable-fariaton.cloud.databricks.com',
+            // Genie Space ID
+            GENIE_SPACE_ID: new URLSearchParams(window.location.search).get('genie_space') ||
+                            '01f10f780c1a1aa791f20224db116c22',
+            // Token: auto-fetched from proxy, or override via ?token= URL param
+            TOKEN: new URLSearchParams(window.location.search).get('token') || '',
+            TOKEN_EXPIRY: 0,
+            // Veeva X-Pages config
+            VEEVA_OBJECT: 'account__v',
+            VEEVA_FIELD: 'name__v',
+            // Fallback physician name
+            DEFAULT_PHYSICIAN: 'Aaron Halstead, MD',
+        };
+
+        // =============================================================
+        // Token via Azure Web App or local serve.py
+        // Override with ?token_server=https://your-app.azurewebsites.net
+        // =============================================================
+        const TOKEN_SERVER = new URLSearchParams(window.location.search).get('token_server') ||
+                             'https://veeva-dbx-token-server.azurewebsites.net';
+
+        async function ensureToken() {
+            if (CONFIG.TOKEN && CONFIG.TOKEN_EXPIRY > Date.now()) return CONFIG.TOKEN;
+            if (CONFIG.TOKEN && CONFIG.TOKEN_EXPIRY === 0 && CONFIG.TOKEN.length > 0) {
+                CONFIG.TOKEN_EXPIRY = Date.now() + 50 * 60 * 1000;
+                return CONFIG.TOKEN;
+            }
+            try {
+                const resp = await fetch(`${TOKEN_SERVER}/api/token`);
+                if (!resp.ok) throw new Error(`Token server ${resp.status}`);
+                const data = await resp.json();
+                CONFIG.TOKEN = data.access_token;
+                CONFIG.TOKEN_EXPIRY = Date.now() + 50 * 60 * 1000;
+                console.log(`Token fetched from ${TOKEN_SERVER}`);
+                return CONFIG.TOKEN;
+            } catch (err) {
+                console.error('Token fetch failed:', err);
+                return CONFIG.TOKEN;
+            }
+        }
+
+        // Chat state
+        let chatHistory = [];
+        let isProcessing = false;
+        let genieConversationId = null;
+        let physicianName = CONFIG.DEFAULT_PHYSICIAN;
+
+        // DOM elements
+        const chatbotTrigger = document.getElementById('chatbotTrigger');
+        const chatbotPopup = document.getElementById('chatbotPopup');
+        const chatbotClose = document.getElementById('chatbotClose');
+        const chatbotMessages = document.getElementById('chatbotMessages');
+        const chatbotInput = document.getElementById('chatbotInput');
+        const chatbotSendButton = document.getElementById('chatbotSendButton');
+        const chatbotSuggestions = document.getElementById('chatbotSuggestions');
+
+        // =============================================================
+        // Veeva X-Pages Integration (from ai-bi-hcp.html)
+        // =============================================================
+        async function getVeevaAccountName() {
+            let accountName = null;
+            try {
+                if (typeof ds !== 'undefined' && typeof ds.getDataForCurrentObject === 'function') {
+                    console.log("Veeva X-Pages DataService detected");
+                    const result = await ds.getDataForCurrentObject(CONFIG.VEEVA_OBJECT, CONFIG.VEEVA_FIELD);
+                    if (result && result.success && result[CONFIG.VEEVA_OBJECT]) {
+                        accountName = result[CONFIG.VEEVA_OBJECT][CONFIG.VEEVA_FIELD];
+                        console.log("Veeva Account Name:", accountName);
+                    }
+                } else {
+                    console.warn("Veeva DataService not available — checking URL params");
+                    const urlParams = new URLSearchParams(window.location.search);
+                    if (urlParams.has('physician_name')) {
+                        accountName = urlParams.get('physician_name');
+                    }
+                }
+            } catch (error) {
+                console.error("Veeva getDataForCurrentObject error:", error);
+                const urlParams = new URLSearchParams(window.location.search);
+                if (urlParams.has('physician_name')) {
+                    accountName = urlParams.get('physician_name');
+                }
+            }
+            return accountName;
+        }
+
+        async function loadPhysicianName() {
+            const name = await getVeevaAccountName();
+            if (name) {
+                physicianName = name;
+            }
+            document.getElementById('physicianName').textContent = physicianName;
+            // Load NBA after physician name is resolved
+            loadNextBestActions(physicianName);
+        }
+
+        // =============================================================
+        // Next Best Actions via SQL Statement Execution API
+        // =============================================================
+        async function loadNextBestActions(physician) {
+            console.log('[NBA] Loading for physician:', JSON.stringify(physician));
+            console.log('[NBA] TOKEN_SERVER:', TOKEN_SERVER);
+
+            const safeName = physician.replace(/'/g, "''");
+            const sql = `SELECT action, priority, channel, due_date, rationale FROM serverless_stable_fariaton_catalog.default.next_best_actions WHERE physician_name LIKE '%${safeName}%' OR physician_name LIKE '%${safeName.split(',')[0]}%' ORDER BY CASE priority WHEN 'High' THEN 1 WHEN 'Medium' THEN 2 ELSE 3 END`;
+            console.log('[NBA] SQL:', sql);
+
+            try {
+                const fetchUrl = `${TOKEN_SERVER}/api/proxy/api/2.0/sql/statements`;
+                console.log('[NBA] Fetching:', fetchUrl);
+
+                const resp = await fetch(fetchUrl, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify({
+                        statement: sql,
+                        warehouse_id: '4f1feb7267686b40',
+                        wait_timeout: '30s',
+                    }),
+                });
+
+                console.log('[NBA] Response status:', resp.status);
+                if (!resp.ok) {
+                    const errText = await resp.text();
+                    console.error('[NBA] Error response:', errText);
+                    throw new Error(`SQL API ${resp.status}: ${errText.substring(0, 200)}`);
+                }
+                const data = await resp.json();
+                console.log('[NBA] Response state:', data.status?.state);
+                console.log('[NBA] Rows:', data.result?.data_array?.length);
+                console.log('[NBA] Full response:', JSON.stringify(data).substring(0, 500));
+
+                if (data.status && data.status.state === 'SUCCEEDED') {
+                    const rows = data.result.data_array || [];
+                    const list = document.getElementById('nbaList');
+                    const refresh = document.getElementById('nbaRefresh');
+
+                    if (rows.length === 0) {
+                        list.innerHTML = `<li>No actions found for physician: "${physician}".<br><small style="color:#7a8ea0;">SQL: ${sql.substring(0, 150)}...</small></li>`;
+                    } else {
+                        const priorityColors = { High: '#ff6b6b', Medium: '#f0ad4e', Low: '#5b9bd5' };
+                        list.innerHTML = rows.map(r => {
+                            const [action, priority, channel, dueDate, rationale] = r;
+                            const color = priorityColors[priority] || '#5b9bd5';
+                            return `<li>
+                                <span style="color:${color};font-weight:600;">[${priority}]</span>
+                                <strong>${action}</strong><br>
+                                <span style="font-size:0.8rem;color:#7a8ea0;">
+                                    ${channel} · Due ${dueDate} · ${rationale}
+                                </span>
+                            </li>`;
+                        }).join('');
+                    }
+                    refresh.textContent = `Refreshed just now · ${rows.length} actions`;
+                } else {
+                    throw new Error(data.status?.error?.message || 'Query failed');
+                }
+            } catch (err) {
+                console.error('[NBA] Load error:', err);
+                document.getElementById('nbaList').innerHTML = `<li style="color:#ff6b6b;">Error: ${err.message}<br><small style="color:#7a8ea0;">TOKEN_SERVER: ${TOKEN_SERVER}<br>Physician: "${physician}"</small></li>`;
+                document.getElementById('nbaRefresh').textContent = 'Error loading';
+            }
+        }
+
+        // =============================================================
+        // Genie REST API Integration
+        // =============================================================
+        async function genieHeaders() {
+            return {
+                'Content-Type': 'application/json',
+            };
+        }
+
+        function genieBaseUrl() {
+            return `${TOKEN_SERVER}/api/proxy/api/2.0/genie/spaces/${CONFIG.GENIE_SPACE_ID}`;
+        }
+
+        async function pollGenieResult(conversationId, messageId, maxWait = 60) {
+            const url = `${genieBaseUrl()}/conversations/${conversationId}/messages/${messageId}`;
+            const start = Date.now();
+            while (Date.now() - start < maxWait * 1000) {
+                try {
+                    const resp = await fetch(url, { headers: await genieHeaders() });
+                    if (resp.ok) {
+                        const data = await resp.json();
+                        const status = data.status || '';
+                        if (['COMPLETED', 'FAILED', 'CANCELLED'].includes(status)) {
+                            return data;
+                        }
+                    }
+                } catch (e) {
+                    console.warn('Poll error:', e);
+                }
+                await new Promise(r => setTimeout(r, 2000));
+            }
+            return null;
+        }
+
+        function extractGenieResponse(data) {
+            let text = '';
+            let query = null;
+            const attachments = data.attachments || [];
+            for (const att of attachments) {
+                if (att.text) text += att.text.content || '';
+                if (att.query) query = att.query.query || null;
+            }
+            if (!text && query) {
+                text = `I ran this query:<br><pre style="background:#f5f5f5;padding:8px;border-radius:4px;overflow-x:auto;font-size:0.8rem;margin-top:4px;">${query}</pre>`;
+                // Check for result data
+                const resultAtt = attachments.find(a => a.query && a.query.result);
+                if (resultAtt && resultAtt.query.result) {
+                    const rows = resultAtt.query.result.row_count;
+                    if (rows !== undefined) text += `<br>Returned <strong>${rows}</strong> rows.`;
+                }
+            }
+            if (!text) text = 'I processed your question but have no text response to display.';
+            return { text, query };
+        }
+
+        async function sendToGenie(message) {
+            try {
+                let data;
+                if (!genieConversationId) {
+                    // Start new conversation
+                    const resp = await fetch(`${genieBaseUrl()}/start-conversation`, {
+                        method: 'POST',
+                        headers: await genieHeaders(),
+                        body: JSON.stringify({ content: message }),
+                    });
+                    if (!resp.ok) throw new Error(`Genie API ${resp.status}: ${await resp.text()}`);
+                    data = await resp.json();
+                    genieConversationId = data.conversation_id;
+                    const messageId = data.message_id;
+                    const result = await pollGenieResult(genieConversationId, messageId);
+                    if (result) return extractGenieResponse(result);
+                    return { text: 'Genie timed out. Please try again.', query: null };
+                } else {
+                    // Continue conversation
+                    const resp = await fetch(`${genieBaseUrl()}/conversations/${genieConversationId}/messages`, {
+                        method: 'POST',
+                        headers: await genieHeaders(),
+                        body: JSON.stringify({ content: message }),
+                    });
+                    if (!resp.ok) throw new Error(`Genie API ${resp.status}: ${await resp.text()}`);
+                    data = await resp.json();
+                    const messageId = data.id;
+                    const result = await pollGenieResult(genieConversationId, messageId);
+                    if (result) return extractGenieResponse(result);
+                    return { text: 'Genie timed out. Please try again.', query: null };
+                }
+            } catch (error) {
+                console.error('Genie error:', error);
+                return { text: `⚠️ Genie error: ${error.message}`, query: null };
+            }
+        }
+
+        // No more mock responses — everything goes to Genie
+        const MOCK_RESPONSES = {
+            "Which HCPs in my territory have similar engagement profiles to Dr Halstead?": `Based on Dr. Halstead's engagement profile (High P2P Need, interest in Zynthari and Novaplex), I found 3 HCPs with similar profiles:<br><br>
+<strong>1. <a href="#" style="color: #0066cc; text-decoration: underline;">Dr. Sarah Martinez, MD</a></strong> - NYC Health & Hospitals<br>
+&nbsp;&nbsp;&nbsp;• <strong>Similarity Score:</strong> <span style="color: #28a745; font-weight: 600;">0.92</span><br>
+&nbsp;&nbsp;&nbsp;• Similar engagement: High P2P Need, Zynthari interest<br>
+&nbsp;&nbsp;&nbsp;• Additional tips: Share real-world data on patient adherence patterns, invite to upcoming extended-release therapy webinar<br><br>
+<strong>2. <a href="#" style="color: #0066cc; text-decoration: underline;">Dr. James Chen, MD</a></strong> - Bellevue Hospital<br>
+&nbsp;&nbsp;&nbsp;• <strong>Similarity Score:</strong> <span style="color: #ff9800; font-weight: 600;">0.78</span><br>
+&nbsp;&nbsp;&nbsp;• Similar engagement: treatment optimization focus, speaker program participant<br>
+&nbsp;&nbsp;&nbsp;• Additional tips: Provide case studies on treatment adoption barriers, share Novaplex patient success stories<br><br>
+<strong>3. <a href="#" style="color: #0066cc; text-decoration: underline;">Dr. Emily Rodriguez, MD</a></strong> - Metropolitan Hospital<br>
+&nbsp;&nbsp;&nbsp;• <strong>Similarity Score:</strong> <span style="color: #dc3545; font-weight: 600;">0.65</span><br>
+&nbsp;&nbsp;&nbsp;• Similar engagement: Treatment journey at 'Agree' stage for multiple brands<br>
+&nbsp;&nbsp;&nbsp;• Additional tips: Offer peer-to-peer discussion opportunities, share comparative effectiveness data<br><br>
+Would you like more details on any of these HCPs?`,
+            
+            "Which approved resources are commonly shared for the Treatment Journey Stages per brand?": `Here are the commonly shared approved resources for each Treatment Journey Stage by brand:<br><br>
+<strong>VELORAN (Aware Stage):</strong><br>
+&nbsp;&nbsp;&nbsp;• <a href="#" target="_blank" style="color: #0066cc; text-decoration: underline;">Product overview brochures</a><br>
+&nbsp;&nbsp;&nbsp;• Clinical trial summaries<br>
+&nbsp;&nbsp;&nbsp;• Mechanism of action educational materials<br>
+&nbsp;&nbsp;&nbsp;• Patient case studies<br>
+&nbsp;&nbsp;&nbsp;• Prescriber guides<br><br>
+<strong>NOVAPLEX (Agree Stage):</strong><br>
+&nbsp;&nbsp;&nbsp;• Real-world evidence data<br>
+&nbsp;&nbsp;&nbsp;• Patient adherence success stories<br>
+&nbsp;&nbsp;&nbsp;• Injection technique videos<br>
+&nbsp;&nbsp;&nbsp;• treatment optimization best practices<br>
+&nbsp;&nbsp;&nbsp;• Comparative effectiveness studies<br>
+&nbsp;&nbsp;&nbsp;• Speaker program materials<br><br>
+<strong>ZYNTHARI (Agree Stage):</strong><br>
+&nbsp;&nbsp;&nbsp;• Extended-release therapy clinical data<br>
+&nbsp;&nbsp;&nbsp;• Patient adherence improvement studies<br>
+&nbsp;&nbsp;&nbsp;• Administration protocols<br>
+&nbsp;&nbsp;&nbsp;• Patient support program information<br>
+&nbsp;&nbsp;&nbsp;• Real-world outcomes data<br>
+&nbsp;&nbsp;&nbsp;• Clinical trial updates for extended-release therapies<br><br>
+<strong>General Resources:</strong><br>
+&nbsp;&nbsp;&nbsp;• Treatment journey infographics<br>
+&nbsp;&nbsp;&nbsp;• Brand comparison charts<br>
+&nbsp;&nbsp;&nbsp;• Patient education materials<br>
+&nbsp;&nbsp;&nbsp;• HCP training modules<br><br>
+Would you like me to generate a personalized resource list for Dr. Halstead based on his current engagement stage?`,
+            
+            "Draft compelling follow up emails, based on the engagement tips.": `Here are three compelling follow-up email drafts based on <a href="#" style="color: #0066cc; text-decoration: underline;">Dr. Halstead</a>'s engagement tips:<br><br>
+<strong>Email 1: Real-World Adherence Data</strong><br>
+─────────────────────────────────────<br>
+<strong>Subject:</strong> Real-World Adherence Data for Zynthari - As Requested<br><br>
+Dear <a href="#" style="color: #0066cc; text-decoration: underline;">Dr. Halstead</a>,<br><br>
+Thank you for our recent discussion on Zynthari's role in improving adherence among chronic pain patients. As you expressed interest in real-world adherence data, I'm pleased to share:<br><br>
+&nbsp;&nbsp;&nbsp;• Recent study showing 92% adherence rates with Zynthari vs. 78% with daily oral regimens<br>
+&nbsp;&nbsp;&nbsp;• Patient-reported outcomes from our long-term follow-up study<br>
+&nbsp;&nbsp;&nbsp;• Case studies from similar patient populations<br><br>
+I've also included updates on upcoming clinical trials for extended-release therapies that you mentioned interest in.<br><br>
+Would you be available for a brief call next week to discuss these findings?<br><br>
+Best regards,<br>
+[Your Name]<br><br>
+<a href="mailto:?subject=Real-World Adherence Data for Zynthari - As Requested&body=Dear Dr. Halstead,%0A%0AThank you for our recent discussion on Zynthari's role in improving adherence among chronic pain patients. As you expressed interest in real-world adherence data, I'm pleased to share:%0A%0A• Recent study showing 92% adherence rates with Zynthari vs. 78% with daily oral regimens%0A• Patient-reported outcomes from our long-term follow-up study%0A• Case studies from similar patient populations%0A%0AI've also included updates on upcoming clinical trials for extended-release therapies that you mentioned interest in.%0A%0AWould you be available for a brief call next week to discuss these findings?%0A%0ABest regards,%0A[Your Name]" style="color: #0066cc; text-decoration: underline; font-weight: 500;">📧 Open in Email Client</a><br><br>
+─────────────────────────────────────<br><br>
+<strong>Email 2: Clinical Trial Updates</strong><br>
+─────────────────────────────────────<br>
+<strong>Subject:</strong> Updates on Extended-Release Therapy Trials - Following Up<br><br>
+Dear <a href="#" style="color: #0066cc; text-decoration: underline;">Dr. Halstead</a>,<br><br>
+Following up on our conversation about upcoming clinical trials for extended-release therapies, I wanted to share:<br><br>
+&nbsp;&nbsp;&nbsp;• Phase 3 trial results for [new long-acting formulation]<br>
+&nbsp;&nbsp;&nbsp;• Enrollment opportunities for your patients<br>
+&nbsp;&nbsp;&nbsp;• Key investigator insights from recent conferences<br><br>
+Given your regular review of Zynthari clinical trial data, I believe these updates will be particularly relevant.<br><br>
+I'm happy to schedule a time to walk through these findings.<br><br>
+Best regards,<br>
+[Your Name]<br><br>
+<a href="mailto:?subject=Updates on Extended-Release Therapy Trials - Following Up&body=Dear Dr. Halstead,%0A%0AFollowing up on our conversation about upcoming clinical trials for extended-release therapies, I wanted to share:%0A%0A• Phase 3 trial results for [new long-acting formulation]%0A• Enrollment opportunities for your patients%0A• Key investigator insights from recent conferences%0A%0AGiven your regular review of Zynthari clinical trial data, I believe these updates will be particularly relevant.%0A%0AI'm happy to schedule a time to walk through these findings.%0A%0ABest regards,%0A[Your Name]" style="color: #0066cc; text-decoration: underline; font-weight: 500;">📧 Open in Email Client</a><br><br>
+─────────────────────────────────────<br><br>
+<strong>Email 3: treatment Management Case Studies</strong><br>
+─────────────────────────────────────<br>
+<strong>Subject:</strong> treatment Management Insights - Building on Our Discussion<br><br>
+Dear <a href="#" style="color: #0066cc; text-decoration: underline;">Dr. Halstead</a>,<br><br>
+Thank you for your valuable insights during our discussion on treatment optimization with Novaplex. As promised, I'm sharing:<br><br>
+&nbsp;&nbsp;&nbsp;• Case studies addressing patient barriers to treatment adoption<br>
+&nbsp;&nbsp;&nbsp;• Best practices from high-performing practices<br>
+&nbsp;&nbsp;&nbsp;• Patient education resources that have shown success<br><br>
+These materials complement the strategies you shared during our speaker program discussion.<br><br>
+Would you like to explore how these approaches might apply to your practice?<br><br>
+Best regards,<br>
+[Your Name]<br><br>
+<a href="mailto:?subject=treatment Management Insights - Building on Our Discussion&body=Dear Dr. Halstead,%0A%0AThank you for your valuable insights during our discussion on treatment optimization with Novaplex. As promised, I'm sharing:%0A%0A• Case studies addressing patient barriers to treatment adoption%0A• Best practices from high-performing practices%0A• Patient education resources that have shown success%0A%0AThese materials complement the strategies you shared during our speaker program discussion.%0A%0AWould you like to explore how these approaches might apply to your practice?%0A%0ABest regards,%0A[Your Name]" style="color: #0066cc; text-decoration: underline; font-weight: 500;">📧 Open in Email Client</a><br><br>
+─────────────────────────────────────<br><br>
+Would you like me to customize any of these emails further or create additional variations?`
+        };
+
+        // Toggle chatbot popup
+        chatbotTrigger.addEventListener('click', () => {
+            chatbotPopup.classList.toggle('open');
+            if (chatbotPopup.classList.contains('open')) {
+                chatbotInput.focus();
+                // Show suggestions if chat is empty
+                setTimeout(() => {
+                    showSuggestions();
+                }, 100);
+            }
+        });
+
+        chatbotClose.addEventListener('click', () => {
+            chatbotPopup.classList.remove('open');
+        });
+
+        // Close on outside click (optional)
+        document.addEventListener('click', (e) => {
+            if (chatbotPopup.classList.contains('open') && 
+                !chatbotPopup.contains(e.target) && 
+                !chatbotTrigger.contains(e.target)) {
+                chatbotPopup.classList.remove('open');
+            }
+        });
+
+        // Initialize chatbot
+        function initChatbot() {
+            chatbotSendButton.addEventListener('click', handleSend);
+            chatbotInput.addEventListener('keypress', (e) => {
+                if (e.key === 'Enter' && !e.shiftKey) {
+                    e.preventDefault();
+                    handleSend();
+                }
+            });
+
+            // Add click handlers for suggestion buttons
+            const suggestionButtons = document.querySelectorAll('.chatbot-suggestion-button');
+            suggestionButtons.forEach(button => {
+                button.addEventListener('click', () => {
+                    const question = button.getAttribute('data-question');
+                    chatbotInput.value = question;
+                    handleSend();
+                });
+            });
+
+            // Load physician name from Veeva or URL params
+            loadPhysicianName();
+
+            // Check if Genie token is configured
+            if (!CONFIG.TOKEN) {
+                console.warn('No Databricks token — pass ?token=YOUR_TOKEN in the URL for Genie API access');
+            }
+        }
+
+        // Hide suggestions
+        function hideSuggestions() {
+            if (chatbotSuggestions) {
+                chatbotSuggestions.style.display = 'none';
+            }
+        }
+
+        // Show suggestions (when chat is empty or after responses)
+        function showSuggestions() {
+            if (chatbotSuggestions) {
+                // Always show suggestions - they'll appear below messages if there are any
+                chatbotSuggestions.style.display = 'flex';
+            }
+        }
+
+        // Handle send message
+        async function handleSend() {
+            const message = chatbotInput.value.trim();
+            
+            if (!message || isProcessing) {
+                return;
+            }
+
+            // Hide suggestions
+            hideSuggestions();
+
+            // Clear input
+            chatbotInput.value = '';
+            
+            // Disable input
+            setProcessing(true);
+
+            // Add user message to UI
+            addMessage('user', message);
+
+            // Check if we have a mock response for this question
+            const mockResponse = MOCK_RESPONSES[message];
+            
+            if (mockResponse) {
+                // Use mock response with a small delay to simulate API call
+                setTimeout(() => {
+                    addMessage('assistant', mockResponse);
+                    setProcessing(false);
+                }, 800);
+                return;
+            }
+
+            // Show loading indicator for API call
+            const loadingId = showLoading();
+
+            try {
+                // Send to Genie REST API
+                const genieResult = await sendToGenie(message);
+
+                // Remove loading indicator
+                removeLoading(loadingId);
+
+                // Add assistant response to UI
+                addMessage('assistant', genieResult.text);
+
+                // Track chat history locally
+                chatHistory.push({ role: 'user', content: message });
+                chatHistory.push({ role: 'assistant', content: genieResult.text });
+
+            } catch (error) {
+                removeLoading(loadingId);
+                console.error('Chat error:', error);
+                addMessage('assistant', `Sorry, I encountered an error: ${error.message}`, null, true);
+            } finally {
+                setProcessing(false);
+            }
+        }
+
+        // Add message to chat
+        function addMessage(role, text, suggestion = null, isError = false) {
+            // Remove empty state if present
+            const emptyState = chatbotMessages.querySelector('.chatbot-empty-state');
+            if (emptyState) {
+                emptyState.remove();
+            }
+
+            // Hide suggestions when adding a message
+            hideSuggestions();
+
+            const messageDiv = document.createElement('div');
+            messageDiv.className = `chatbot-message ${role}`;
+            
+            const bubble = document.createElement('div');
+            bubble.className = 'chatbot-message-bubble';
+            if (isError) {
+                bubble.style.background = '#fee';
+                bubble.style.color = '#c33';
+                bubble.style.border = '1px solid #fcc';
+            }
+            // Use innerHTML to support HTML formatting
+            bubble.innerHTML = text;
+
+            messageDiv.appendChild(bubble);
+
+            // Add suggestion if provided
+            if (suggestion) {
+                const suggestionDiv = document.createElement('div');
+                suggestionDiv.className = 'chatbot-suggestion';
+                suggestionDiv.textContent = `💡 ${suggestion}`;
+                messageDiv.appendChild(suggestionDiv);
+            }
+
+            chatbotMessages.appendChild(messageDiv);
+            
+            // Scroll to bottom
+            chatbotMessages.scrollTop = chatbotMessages.scrollHeight;
+            
+            // Show suggestions again after every assistant response
+            if (role === 'assistant' && !isError) {
+                setTimeout(() => {
+                    showSuggestions();
+                    // Scroll again to show suggestions
+                    chatbotMessages.scrollTop = chatbotMessages.scrollHeight;
+                }, 600);
+            }
+        }
+
+        // Show loading indicator
+        function showLoading() {
+            const loadingId = 'loading-' + Date.now();
+            const messageDiv = document.createElement('div');
+            messageDiv.className = 'chatbot-message assistant';
+            messageDiv.id = loadingId;
+            
+            const bubble = document.createElement('div');
+            bubble.className = 'chatbot-message-bubble chatbot-loading';
+            bubble.innerHTML = '<span>Thinking</span><span class="chatbot-loading-dots"><span class="chatbot-loading-dot"></span><span class="chatbot-loading-dot"></span><span class="chatbot-loading-dot"></span></span>';
+            
+            messageDiv.appendChild(bubble);
+            chatbotMessages.appendChild(messageDiv);
+            chatbotMessages.scrollTop = chatbotMessages.scrollHeight;
+            
+            return loadingId;
+        }
+
+        // Remove loading indicator
+        function removeLoading(loadingId) {
+            const loadingElement = document.getElementById(loadingId);
+            if (loadingElement) {
+                loadingElement.remove();
+            }
+        }
+
+        // Set processing state
+        function setProcessing(processing) {
+            isProcessing = processing;
+            chatbotSendButton.disabled = processing;
+            chatbotInput.disabled = processing;
+            if (processing) {
+                chatbotSendButton.textContent = 'Sending...';
+            } else {
+                chatbotSendButton.textContent = 'Send';
+                chatbotInput.focus();
+            }
+        }
+
+        // Show error message
+        function showError(message) {
+            const errorDiv = document.createElement('div');
+            errorDiv.style.background = '#fee';
+            errorDiv.style.color = '#c33';
+            errorDiv.style.padding = '0.75rem';
+            errorDiv.style.borderRadius = '0.5rem';
+            errorDiv.style.margin = '0.5rem';
+            errorDiv.style.border = '1px solid #fcc';
+            errorDiv.style.fontSize = '0.85rem';
+            errorDiv.textContent = message;
+            chatbotMessages.appendChild(errorDiv);
+        }
+
+        // Initialize on page load
+        if (document.readyState === 'loading') {
+            document.addEventListener('DOMContentLoaded', initChatbot);
+        } else {
+            initChatbot();
+        }
+    </script>
+</body>
+</html>
