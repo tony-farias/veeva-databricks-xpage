@@ -4,6 +4,8 @@ A Veeva Vault CRM X-Page that embeds Databricks AI/BI Genie and SQL-powered Next
 
 ![Screenshot](screenshot.png)
 
+![Screenshot](screenshot2.png)
+
 ## What It Does
 
 This HTML page runs as a **Veeva Vault CRM X-Page** embedded in an HCP account record. It provides:
