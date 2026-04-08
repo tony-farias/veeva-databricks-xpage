@@ -1,4 +1,4 @@
-# Veeva CRM X-Page with Databricks AI/BI
+# Veeva CRM X-Page with Databricks AI/BI, Databricks Model Serving and Databricks SQL
 
 A Veeva Vault CRM X-Page that embeds Databricks AI/BI Genie and SQL-powered Next Best Actions directly into the HCP engagement view.
 
