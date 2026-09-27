@@ -1,0 +1,23 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="color-scheme" content="light" />
+    <title>Research Insights · Databricks Genie</title>
+    <!-- Runs before the application bundle so WKWebView startup failures are
+         visible instead of leaving an unexplained blank X-Page. -->
+    <script src="./startup-guard.js"></script>
+  </head>
+  <body>
+    <div id="root"></div>
+    <!-- Veeva's library depends on Q and creates window.ds. Both files are
+         copied into the X-Page package by scripts/prepare-xpage-assets.mjs. -->
+    <script src="./vendor/q.js"></script>
+    <script src="./vendor/X-PagesLibrary.js"></script>
+    <!-- Runtime configuration stays outside the hashed bundle so each Vault
+         environment can use the same build with a different workspace/broker. -->
+    <script src="./xpage-config.js"></script>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
+</html>

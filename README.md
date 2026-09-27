@@ -1,171 +1,192 @@
-# Veeva Vault CRM X-Page with Databricks AI/BI, Databricks Model Serving and Databricks SQL
+# Veeva Vault CRM + Databricks Genie Agent X-Page
 
-A Veeva Vault CRM X-Page that embeds Databricks AI/BI Genie and SQL-powered Next Best Actions directly into the HCP engagement view.
+A responsive, headless Databricks Genie Agent experience for Veeva Vault CRM X-Pages. It gives users conversational analytics, generated SQL, tabular evidence, visualizations, and Research mode without embedding the Databricks web UI in an iframe.
 
-![Screenshot](screenshot.png)
+The application is designed for Vault CRM on iPad. Veeva supplies the signed-in user's Microsoft Entra assertion through the native X-Pages SSO bridge. A small broker exchanges that assertion for a short-lived Databricks token representing the same user, so Unity Catalog permissions and audit attribution remain user-specific.
 
-![Screenshot](screenshot2.png)
+## What is included
 
-## What It Does
-
-This HTML page runs as a **Veeva Vault CRM X-Page** embedded in an HCP account record. It provides:
-
-- **Next Best Actions** — Personalized recommended actions pulled in real-time from a Databricks Delta table via the SQL Statement Execution API
-- **AI/BI Genie Chatbot** — Natural language queries over CRM and engagement data via a Databricks Genie Space
-- **HCP Engagement Summary** — Scientific engagement history, speaker positions
-- **Veeva Context Integration** — Automatically reads the current physician name from the Veeva X-Pages DataService API
+- React and TypeScript X-Page UI modeled on the Databricks Genie interface
+- Native Veeva X-Pages SSO integration
+- Per-user Databricks OAuth federation exchange
+- Genie Agent chat with follow-up conversations
+- Generated SQL and governed query-result tables
+- PNG visualization discovery and rendering, including bare attachment IDs
+- Accessible table fallback when a visualization is unavailable
+- Research/Agent mode response streaming
+- Responsive iPad layout with no iframe, popup, Databricks cookie, or Safari handoff
+- Node.js/Express authentication and API broker
+- Synthetic NSCLC demonstration data with no PHI
 
 ## Architecture
 
-```
-┌─────────────────────────────────────────────────────────────┐
-│  Veeva Vault CRM (browser)                                  │
-│  ┌───────────────────────────────────────────────────────┐  │
-│  │  GenieAndDBSQL.html (X-Page)                          │  │
-│  │                                                       │  │
-│  │  1. Reads HCP name from Veeva X-Pages DataService     │  │
-│  │  2. Fetches Next Best Actions via Azure proxy          │  │
-│  │  3. Sends Genie questions via Azure proxy              │  │
-│  └───────────────┬───────────────────────────────────────┘  │
-└──────────────────┼──────────────────────────────────────────┘
-                   │ HTTPS (CORS-safe)
-                   ▼
-┌──────────────────────────────────────┐
-│  Azure Web App (Token Server)        │
-│  veeva-dbx-token-server.azurewebsites.net │
-│                                      │
-│  /api/token    → M2M OAuth token     │
-│  /api/proxy/*  → Proxies all         │
-│                  Databricks API calls │
-│                  (injects auth token) │
-└──────────────────┬───────────────────┘
-                   │ Server-side (no CORS)
-                   ▼
-┌──────────────────────────────────────┐
-│  Databricks Workspace (FEVM)         │
-│                                      │
-│  SQL Statement API                   │
-│  ├─ next_best_actions table          │
-│  └─ Any SQL query                    │
-│                                      │
-│  Genie Space API                     │
-│  └─ Natural language → SQL → results │
-│                                      │
-│  Unity Catalog (governance)          │
-│  SQL Warehouse (compute)             │
-└──────────────────────────────────────┘
+```text
+Veeva Vault CRM X-Page
+        |
+        | ds.getSSOAccessToken(...)
+        v
+Veeva-managed Entra user assertion
+        |
+        | HTTPS
+        v
+Authentication/API broker
+        |
+        | OAuth token exchange
+        v
+Databricks token for the individual user
+        |
+        +--> Genie Agent chat APIs
+        +--> query-result API
+        +--> visualization download API
+        +--> Research/Agent response stream
+        |
+        v
+Unity Catalog data and SQL warehouse
 ```
 
-### Why the Azure Proxy?
+The browser never receives the Databricks access token. The broker returns an encrypted, short-lived application session and pins requests to one configured Genie Agent.
 
-Browsers enforce CORS (Cross-Origin Resource Sharing). The Veeva CRM page runs on `vcrmcdnreport.veevacrm.com`, which cannot directly call Databricks APIs at `*.cloud.databricks.com` — the browser blocks it.
+## Repository layout
 
-The Azure Web App solves this by:
-1. **Fetching OAuth tokens server-side** via M2M client credentials (no CORS restriction)
-2. **Proxying all API calls** — the browser talks to Azure (which has CORS enabled), and Azure talks to Databricks
-3. **Caching tokens** — the M2M token is cached and auto-refreshed, so the page never needs to handle auth
-
-### Authentication Flow
-
-```
-Browser → GET /api/token → Azure fetches M2M OAuth token from Databricks OIDC → returns to browser
-Browser → POST /api/proxy/api/2.0/sql/statements → Azure injects token, forwards to Databricks → returns results
-```
-
-The Service Principal credentials (client ID + secret) are stored as Azure App Service environment variables — never exposed to the browser.
-
-## Setup
-
-### Prerequisites
-
-- Databricks workspace with Unity Catalog
-- Databricks Service Principal with M2M OAuth secret
-- Azure subscription for the token server
-- Veeva Vault CRM with X-Pages enabled
-
-### 1. Deploy the Token Server
-
-See [ai-bi-token-server-az-webapp](https://github.com/tony-farias/ai-bi-token-server-az-webapp) for the Azure Web App deployment.
-
-Required Azure App Service environment variables:
-
-```
-INSTANCE_URL=https://your-workspace.cloud.databricks.com
-SERVICE_PRINCIPAL_ID=your-sp-client-id
-SERVICE_PRINCIPAL_SECRET=your-sp-secret
-WORKSPACE_ID=your-workspace-id
+```text
+src/                         X-Page React application
+public/xpage-config.js       Non-secret X-Page runtime configuration
+broker/                      Authentication and Databricks API broker
+ops/                         Synthetic-data and demo SQL
+scripts/                     X-Page build and packaging scripts
+PRODUCT.md                   Product and UX context
+DESIGN.md                    UI design system
+DEMO.md                      Demonstration guide
 ```
 
-### 2. Create the Data
+## Requirements
 
-Create the `next_best_actions` table in Unity Catalog:
+- Node.js 20.19+, 22.13+, or 24+
+- A Veeva Vault CRM X-Page SSO configuration
+- An Azure Databricks workspace with OAuth token federation configured
+- A Genie Agent shared with the intended users
+- A SQL warehouse and Unity Catalog data accessible to those users
+- An HTTPS host for the broker
 
-```sql
-CREATE TABLE catalog.schema.next_best_actions (
-  physician_name STRING,
-  action STRING,
-  priority STRING,    -- High, Medium, Low
-  channel STRING,     -- Email, Meeting, Calendar Invite, Internal Action
-  due_date STRING,
-  rationale STRING
-);
+## Configure the X-Page
+
+Edit `public/xpage-config.js`. It contains no secret values.
+
+```js
+window.__GENIE_XPAGE_CONFIG__ = Object.freeze({
+  workspaceHost: "adb-<workspace-id>.<region>.azuredatabricks.net",
+  workspaceOrgId: "<workspace-id>",
+  genieAgentId: "<genie-agent-id>",
+  authBrokerBaseUrl: "https://<broker-host>",
+  ssoConfigurationName: "<veeva-sso-configuration-name>",
+  defaultMode: "chat",
+  displayName: "Clinical Genie",
+  contextLabel: "Governed by Unity Catalog",
+});
 ```
 
-### 3. Grant Permissions
+For the current implementation, the broker separately allowlists the same workspace and Genie Agent. This duplication prevents a modified browser configuration from using the broker to access an arbitrary Agent.
 
-The Service Principal needs:
-- `USE_CATALOG` + `USE_SCHEMA` + `SELECT` on the catalog
-- `CAN_USE` on the SQL Warehouse
-- `CAN_RUN` on the Genie Space
-
-If the workspace has an IP Access List, add the Azure Web App's outbound IPs.
-
-### 4. Configure the HTML
-
-Edit `GenieAndDBSQL.html` and update:
-
-```javascript
-const CONFIG = {
-    DATABRICKS_HOST: 'https://your-workspace.cloud.databricks.com',
-    GENIE_SPACE_ID: 'your-genie-space-id',
-    ...
-};
-
-const TOKEN_SERVER = '...' ||
-    'https://your-token-server.azurewebsites.net';
-```
-
-Also update the SQL query in `loadNextBestActions()` to point to your table.
-
-### 5. Upload to Veeva
-
-1. In Veeva Vault CRM, go to **Admin > X-Pages**
-2. Create a new X-Page
-3. Upload `GenieAndDBSQL.html` as the page content
-4. Configure the X-Page to appear on the **Account** record page
-5. The page will automatically read the current HCP name via `ds.getDataForCurrentObject('account__v', 'name__v')`
-
-### 6. Test Locally
+## Build the X-Page package
 
 ```bash
-# Open with the Azure token server (no local server needed)
-open "GenieAndDBSQL.html?token_server=https://your-token-server.azurewebsites.net&physician_name=Aaron%20Halstead%2C%20MD"
+npm ci
+npm run lint
+npm run package:xpage
 ```
 
-## Files
+The build creates:
 
-| File | Description |
-|------|-------------|
-| `GenieAndDBSQL.html` | The X-Page HTML — complete single-file app with embedded CSS and JavaScript |
-| `README.md` | This file |
-| `screenshot.png` | Screenshot of the page running in Veeva CRM |
+```text
+artifacts/vault-crm-genie-xpage.zip
+```
 
-## Configuration Reference
+Upload that ZIP directly as the Veeva X-Page content package. Do not unzip it first. The package already has `index.html` at its root and uses relative asset paths suitable for the Veeva CDN and iPad application.
 
-| URL Parameter | Default | Description |
-|---------------|---------|-------------|
-| `token_server` | `https://veeva-dbx-token-server.azurewebsites.net` | Azure token server URL |
-| `physician_name` | *(from Veeva API)* | Override physician name for testing |
-| `host` | `https://fevm-serverless-stable-fariaton.cloud.databricks.com` | Databricks workspace URL |
-| `genie_space` | `01f10f780c1a1aa791f20224db116c22` | Genie Space ID |
-| `token` | *(auto-fetched)* | Manual token override (bypasses token server) |
+## Configure the broker
+
+Copy the example environment file and provide deployment-specific values:
+
+```bash
+cd broker
+cp .env.example .env
+npm ci
+npm test
+npm run build
+```
+
+Important settings include:
+
+| Setting | Purpose |
+| --- | --- |
+| `DBX_WORKSPACE_HOST` | Workspace hosting the Genie Agent |
+| `DBX_GENIE_SPACE_ID` | Internal API identifier for the configured Genie Agent |
+| `VEEVA_SSO_ISSUER` | Exact issuer of the Veeva-provided Entra assertion |
+| `VEEVA_SSO_AUDIENCE` | Expected token audience |
+| `STATE_ENCRYPTION_SECRET` | Encrypts short-lived broker sessions |
+| `ALLOWED_PARENT_ORIGINS` | Exact browser origins allowed to call the broker |
+| `ALLOW_OPAQUE_PARENT_ORIGIN` | Enables native/file X-Page origins when required |
+
+The broker also retains the earlier browser-session comparison routes. Their custom OAuth application settings are documented in `broker/.env.example`.
+
+## Authentication and authorization
+
+1. The X-Page requests an assertion from Veeva's native SSO bridge.
+2. The broker verifies the assertion issuer, audience, identity claim, and expiration.
+3. The broker exchanges it at the target Databricks workspace.
+4. Databricks returns a token for the individual user.
+5. Every Genie Agent API call uses that user's token.
+
+Consequently, the following continue to apply:
+
+- Workspace and Genie Agent access
+- Unity Catalog grants
+- Row filters and column masks
+- SQL warehouse permissions
+- Databricks audit attribution
+
+This is not a shared-service-principal authorization model.
+
+## Synthetic demonstration data
+
+`ops/create_nsclc_genie_demo.sql` creates a disclosed synthetic cohort of 49,915 fictional Stage IV NSCLC patients in:
+
+```text
+af_vault_genie_demo.nsclc_rwe.gold_patient_master
+```
+
+The data contains no real patient records or PHI. It covers demographics, biomarkers, ECOG performance status, treatment, survival, and cost of care for demonstration purposes.
+
+## Validation
+
+Before deploying a release:
+
+```bash
+npm run lint
+npm run package:xpage
+
+cd broker
+npm test
+```
+
+After deployment, verify:
+
+1. The displayed identity matches the Veeva/Entra user.
+2. A chat question returns prose, SQL, rows, and a visualization.
+3. `View data` remains available alongside the chart.
+4. Research mode either completes or reports that the workspace capability is unavailable.
+5. Databricks audit events identify the individual user.
+6. The same package works inside Vault CRM for iPad without opening Safari.
+
+## Security notes
+
+- Do not place Databricks tokens or client secrets in `public/xpage-config.js`.
+- Restrict the broker to the intended Vault/X-Page origins.
+- Keep the broker's Agent allowlist enabled.
+- Use short-lived federation tokens and rotate the broker session secret.
+- Grant users only the warehouse, Agent, catalog, schema, table, row, and column access they require.
+- Use synthetic data for demos unless the full production privacy and compliance design has been approved.
+
+## License
+
+No license has been specified. Add one before redistributing the project outside the intended organization.
