@@ -46,12 +46,24 @@ Unity Catalog data and SQL warehouse
 
 The browser never receives the Databricks access token. The broker returns an encrypted, short-lived application session and pins requests to one configured Genie Agent.
 
+## Choose an identity model
+
+This repository now contains two complete X-Page implementations so a customer can choose the authorization model that fits its requirements:
+
+| Implementation | Databricks caller | Best fit |
+| --- | --- | --- |
+| Repository root | Individual Veeva/Entra user | Preserve each user's Unity Catalog permissions, row filters, column masks, and Databricks audit identity |
+| [`service-principal/`](service-principal/) | Fixed workspace service principal | Give all X-Page users one deliberately curated data boundary without provisioning each user in Databricks |
+
+The service-principal implementation is independent: it has its own React application, broker, dependencies, build scripts, documentation, and deployment configuration. Databricks records the shared service principal for those requests, while the broker maintains a compensating audit correlation to the verified Veeva user.
+
 ## Repository layout
 
 ```text
 src/                         X-Page React application
 public/xpage-config.js       Non-secret X-Page runtime configuration
 broker/                      Authentication and Databricks API broker
+service-principal/            Independent fixed-service-principal alternative
 ops/                         Synthetic-data and demo SQL
 scripts/                     X-Page build and packaging scripts
 PRODUCT.md                   Product and UX context
