@@ -1,3 +1,27 @@
+export interface VaultSession {
+  sessionId: string;
+  vaultUrl: string;
+  isSandbox?: boolean;
+}
+
+export interface UserFederationCredentials {
+  assertion: string;
+  vaultSession: VaultSession;
+}
+
+export async function getUserFederationCredentials(
+  configurationName: string,
+): Promise<UserFederationCredentials> {
+  const vaultSession = await getVaultSession();
+  try {
+    const assertion = await getSSOAssertion(configurationName);
+    return { assertion, vaultSession };
+  } catch (error) {
+    vaultSession.sessionId = "";
+    throw error;
+  }
+}
+
 export async function getSSOAssertion(configurationName: string): Promise<string> {
   const ds = await waitForVeevaBridge(5_000);
   if (!ds?.getSSOAccessToken) throw new Error("veeva_sso_unavailable");
@@ -10,6 +34,36 @@ export async function getSSOAssertion(configurationName: string): Promise<string
   const assertion = findJwt(result);
   if (!assertion) throw new Error("veeva_sso_returned_no_token");
   return assertion;
+}
+
+export async function getVaultSession(): Promise<VaultSession> {
+  const ds = await waitForVeevaBridge(5_000);
+  if (!ds?.getVaultSessionId) throw new Error("veeva_vault_session_unavailable");
+
+  const result = await withTimeout(
+    Promise.resolve(ds.getVaultSessionId()),
+    20_000,
+    "veeva_vault_session_timed_out",
+  );
+  const sessionId = findNamedString(result, new Set(["sessionid", "vaultsessionid"]));
+  const vaultUrl = findNamedString(result, new Set(["instanceurl", "vaulturl", "vaultdns", "vaultdomain", "url"]));
+  if (!sessionId || !vaultUrl) throw new Error("veeva_vault_session_invalid_response");
+
+  let parsed: URL;
+  try {
+    parsed = new URL(vaultUrl.includes("://") ? vaultUrl : `https://${vaultUrl}`);
+  } catch {
+    throw new Error("veeva_vault_session_invalid_response");
+  }
+  if (parsed.protocol !== "https:" && !(parsed.protocol === "http:" && isLocalhost(parsed.hostname))) {
+    throw new Error("veeva_vault_session_invalid_response");
+  }
+
+  return {
+    sessionId,
+    vaultUrl: parsed.origin,
+    isSandbox: findNamedBoolean(result, new Set(["issandbox", "sandbox"])),
+  };
 }
 
 function waitForVeevaBridge(timeoutMs = 1_500): Promise<VeevaDataService | undefined> {
@@ -36,6 +90,52 @@ function findJwt(value: unknown, depth = 0, seen = new WeakSet<object>()): strin
     if (found) return found;
   }
   return undefined;
+}
+
+function findNamedString(
+  value: unknown,
+  names: ReadonlySet<string>,
+  depth = 0,
+  seen = new WeakSet<object>(),
+): string | undefined {
+  if (!value || typeof value !== "object" || depth > 5 || seen.has(value)) return undefined;
+  seen.add(value);
+  const record = value as Record<string, unknown>;
+  for (const [key, child] of Object.entries(record)) {
+    if (names.has(normalizeKey(key)) && typeof child === "string" && child.trim()) return child.trim();
+  }
+  for (const child of Object.values(record)) {
+    const found = findNamedString(child, names, depth + 1, seen);
+    if (found) return found;
+  }
+  return undefined;
+}
+
+function findNamedBoolean(
+  value: unknown,
+  names: ReadonlySet<string>,
+  depth = 0,
+  seen = new WeakSet<object>(),
+): boolean | undefined {
+  if (!value || typeof value !== "object" || depth > 5 || seen.has(value)) return undefined;
+  seen.add(value);
+  const record = value as Record<string, unknown>;
+  for (const [key, child] of Object.entries(record)) {
+    if (names.has(normalizeKey(key)) && typeof child === "boolean") return child;
+  }
+  for (const child of Object.values(record)) {
+    const found = findNamedBoolean(child, names, depth + 1, seen);
+    if (found !== undefined) return found;
+  }
+  return undefined;
+}
+
+function normalizeKey(value: string): string {
+  return value.toLowerCase().replace(/[^a-z0-9]/g, "");
+}
+
+function isLocalhost(hostname: string): boolean {
+  return hostname === "localhost" || hostname === "127.0.0.1";
 }
 
 function withTimeout<T>(promise: Promise<T>, timeoutMs: number, message: string): Promise<T> {

@@ -6,7 +6,7 @@ window.__GENIE_XPAGE_CONFIG__ = Object.freeze({
   workspaceHost: "adb-7405615520098858.18.azuredatabricks.net",
   workspaceOrgId: "7405615520098858",
   genieAgentId: "01f1b959138b1575a09b54923fa27532",
-  authBrokerBaseUrl: "https://af-vault-genie-sso-20260923.azurewebsites.net",
+  authBrokerBaseUrl: "https://af-vault-genie-userfed-eus2.azurewebsites.net",
   ssoConfigurationName: "databricks_genie_user_federation__c",
   defaultMode: "chat",
   displayName: "NSCLC RWE — HEOR Cohort Explorer",

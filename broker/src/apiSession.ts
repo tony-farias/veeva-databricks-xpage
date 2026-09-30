@@ -2,12 +2,17 @@ import { createCipheriv, createDecipheriv, createHash, randomBytes } from "node:
 
 export interface ApiSession {
   accessToken: string;
-  userName: string;
-  displayName: string | null;
+  actorUserName: string;
+  actorDisplayName: string | null;
+  actorSubject: string;
+  externalUserName: string;
+  databricksUserName: string;
+  databricksDisplayName: string | null;
+  sessionId: string;
   expiresAt: number;
 }
 
-const VERSION = "s1";
+const VERSION = "uf1";
 
 export function sealApiSession(session: ApiSession, secret: string): string {
   const iv = randomBytes(12);
@@ -31,8 +36,13 @@ export function openApiSession(value: string, secret: string, now = Date.now()):
     const parsed = JSON.parse(plaintext) as Partial<ApiSession>;
     if (
       typeof parsed.accessToken !== "string" ||
-      typeof parsed.userName !== "string" ||
-      (parsed.displayName !== null && typeof parsed.displayName !== "string") ||
+      typeof parsed.actorUserName !== "string" ||
+      (parsed.actorDisplayName !== null && typeof parsed.actorDisplayName !== "string") ||
+      typeof parsed.actorSubject !== "string" ||
+      typeof parsed.externalUserName !== "string" ||
+      typeof parsed.databricksUserName !== "string" ||
+      (parsed.databricksDisplayName !== null && typeof parsed.databricksDisplayName !== "string") ||
+      typeof parsed.sessionId !== "string" ||
       typeof parsed.expiresAt !== "number" ||
       parsed.expiresAt <= now
     ) throw new Error("invalid_session");

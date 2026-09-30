@@ -10,3 +10,12 @@
 - [x] Make visualization discovery/download resilient and retain table fallback.
 - [x] Run lint, frontend build, broker tests, and package the X-Page ZIP.
 - [x] Deploy broker configuration and verify an end-to-end chart response.
+- [x] Preserve the independent fixed-service-principal implementation for comparison.
+- [x] Add native Vault-session verification to the federated-user flow.
+- [x] Make issuer, audience, and Databricks username claim configurable for Okta or Entra.
+- [x] Bind the Vault, external JWT, and resolved Databricks usernames before creating a session.
+- [x] Remove the obsolete browser OAuth/client-secret path from the federated-user broker.
+- [x] Validate and deploy the hardened federated-user broker and refreshed X-Page package.
+- [x] Remove obsolete Databricks browser-OAuth client credentials from the original broker deployment.
+- [x] Deploy the per-user broker to the healthy East US 2 endpoint and retain a repaired original endpoint as fallback.
+- [ ] Add the customer Okta account federation policy after issuer, audience, and claim values are supplied.

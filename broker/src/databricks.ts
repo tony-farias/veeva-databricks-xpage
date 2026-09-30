@@ -1,10 +1,14 @@
 import type { BrokerConfig } from "./config.js";
 
-interface ExternalClaims {
+interface JwtHeader {
+  alg?: unknown;
+}
+
+interface ExternalClaims extends Record<string, unknown> {
   iss?: unknown;
   aud?: unknown;
-  preferred_username?: unknown;
   exp?: unknown;
+  nbf?: unknown;
 }
 
 interface TokenExchangeResponse {
@@ -14,6 +18,7 @@ interface TokenExchangeResponse {
 
 export interface FederatedIdentity {
   accessToken: string;
+  externalUserName: string;
   userName: string;
   displayName: string | null;
   expiresAt: number;
@@ -27,10 +32,11 @@ export class DatabricksError extends Error {
 
 export async function exchangeFederatedAssertion(
   assertion: string,
+  expectedActorUserName: string,
   config: BrokerConfig,
 ): Promise<FederatedIdentity> {
-  const claims = decodeJwtPayload(assertion);
-  assertExternalClaims(claims, config);
+  const { claims, externalUserName } = parseFederatedAssertion(assertion, config);
+  assertSameUser(expectedActorUserName, externalUserName);
 
   const body = new URLSearchParams({
     subject_token: assertion,
@@ -46,18 +52,24 @@ export async function exchangeFederatedAssertion(
   });
   const payload = await response.json().catch(() => ({})) as TokenExchangeResponse;
   if (!response.ok || !payload.access_token) {
-    throw new DatabricksError(response.status === 401 ? "federation_rejected" : "token_exchange_failed", response.status);
+    const rejected = response.status === 400 || response.status === 401 || response.status === 403;
+    throw new DatabricksError(rejected ? "federation_rejected" : "token_exchange_failed", rejected ? 401 : 502);
   }
 
   const identity = await currentUser(payload.access_token, config);
-  const tokenClaims = decodeJwtPayload(payload.access_token);
-  const tokenExpiry = typeof tokenClaims.exp === "number" ? tokenClaims.exp * 1_000 : Number.POSITIVE_INFINITY;
-  const exchangeExpiry = Date.now() + Math.max(60, payload.expires_in ?? 3_600) * 1_000;
-  const externalExpiry = typeof claims.exp === "number" ? claims.exp * 1_000 : Number.POSITIVE_INFINITY;
+  assertSameUser(expectedActorUserName, externalUserName, identity.userName);
+
+  const tokenExpiry = accessTokenExpiry(payload.access_token);
+  const lifetimeSeconds = Number.isFinite(payload.expires_in) && Number(payload.expires_in) > 0
+    ? Number(payload.expires_in)
+    : 3_600;
+  const exchangeExpiry = Date.now() + lifetimeSeconds * 1_000;
+  const externalExpiry = Number(claims.exp) * 1_000;
   const expiresAt = Math.min(tokenExpiry, exchangeExpiry, externalExpiry, Date.now() + 3_600_000);
 
   return {
     accessToken: payload.access_token,
+    externalUserName,
     userName: identity.userName,
     displayName: identity.displayName,
     expiresAt,
@@ -90,17 +102,57 @@ export function sanitizeDatabricksJson(value: unknown): unknown {
   return result;
 }
 
-function assertExternalClaims(claims: ExternalClaims, config: BrokerConfig): void {
-  const audiences = Array.isArray(claims.aud) ? claims.aud : [claims.aud];
-  if (claims.iss !== config.veevaSsoIssuer || !audiences.includes(config.veevaSsoAudience)) {
+export function sameUserName(...values: string[]): boolean {
+  if (values.length < 2) return true;
+  const expected = canonicalUserName(values[0] ?? "");
+  return Boolean(expected) && values.every((value) => canonicalUserName(value) === expected);
+}
+
+function parseFederatedAssertion(
+  assertion: string,
+  config: BrokerConfig,
+): { claims: ExternalClaims; externalUserName: string } {
+  if (assertion.length > 16_384) throw new DatabricksError("invalid_external_token", 401);
+  const parts = assertion.split(".");
+  if (parts.length !== 3 || !parts[0] || !parts[1] || !parts[2]) {
     throw new DatabricksError("invalid_external_token", 401);
   }
-  if (typeof claims.preferred_username !== "string" || !claims.preferred_username) {
+  const header = decodeJwtPart<JwtHeader>(parts[0]);
+  const claims = decodeJwtPart<ExternalClaims>(parts[1]);
+  if (header.alg !== "RS256" && header.alg !== "ES256") {
+    throw new DatabricksError("invalid_external_token", 401);
+  }
+
+  const audiences = Array.isArray(claims.aud) ? claims.aud : [claims.aud];
+  if (
+    claims.iss !== config.federatedTokenIssuer
+    || !audiences.some((audience) => typeof audience === "string" && config.federatedTokenAudiences.has(audience))
+  ) {
+    throw new DatabricksError("invalid_external_token", 401);
+  }
+
+  const identityClaim = claims[config.federatedUsernameClaim];
+  if (typeof identityClaim !== "string" || !identityClaim.trim()) {
     throw new DatabricksError("missing_user_identity", 401);
   }
-  if (typeof claims.exp !== "number" || claims.exp * 1_000 <= Date.now()) {
+  const nowSeconds = Date.now() / 1_000;
+  if (typeof claims.exp !== "number" || claims.exp <= nowSeconds + 30) {
     throw new DatabricksError("external_token_expired", 401);
   }
+  if (typeof claims.nbf === "number" && claims.nbf > nowSeconds + 60) {
+    throw new DatabricksError("invalid_external_token", 401);
+  }
+
+  // This is only a defensive precheck. Databricks validates the JWT signature
+  // and the account federation policy before returning an access token.
+  return { claims, externalUserName: identityClaim.trim() };
+}
+
+function assertSameUser(vaultUserName: string, externalUserName: string, databricksUserName?: string): void {
+  const identities = databricksUserName
+    ? [vaultUserName, externalUserName, databricksUserName]
+    : [vaultUserName, externalUserName];
+  if (!sameUserName(...identities)) throw new DatabricksError("identity_mismatch", 403);
 }
 
 async function currentUser(
@@ -118,15 +170,29 @@ async function currentUser(
   return { userName: payload.userName, displayName: payload.displayName ?? null };
 }
 
-function decodeJwtPayload(token: string): ExternalClaims {
-  if (token.length > 16_384) throw new DatabricksError("invalid_external_token", 401);
-  const parts = token.split(".");
-  if (parts.length !== 3 || !parts[1]) throw new DatabricksError("invalid_external_token", 401);
+function decodeJwtPart<T>(value: string): T {
   try {
-    return JSON.parse(Buffer.from(parts[1], "base64url").toString("utf8")) as ExternalClaims;
+    const parsed = JSON.parse(Buffer.from(value, "base64url").toString("utf8")) as unknown;
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) throw new Error("not_an_object");
+    return parsed as T;
   } catch {
     throw new DatabricksError("invalid_external_token", 401);
   }
+}
+
+function accessTokenExpiry(token: string): number {
+  const parts = token.split(".");
+  if (parts.length !== 3 || !parts[1]) return Number.POSITIVE_INFINITY;
+  try {
+    const claims = JSON.parse(Buffer.from(parts[1], "base64url").toString("utf8")) as { exp?: unknown };
+    return typeof claims.exp === "number" ? claims.exp * 1_000 : Number.POSITIVE_INFINITY;
+  } catch {
+    return Number.POSITIVE_INFINITY;
+  }
+}
+
+function canonicalUserName(value: string): string {
+  return value.trim().toLowerCase();
 }
 
 function workspaceBase(config: BrokerConfig): string {

@@ -4,39 +4,74 @@ import { loadConfig } from "./config.js";
 
 const baseEnv: NodeJS.ProcessEnv = {
   DBX_WORKSPACE_HOST: "workspace.example.com",
-  DBX_GENIE_SPACE_ID: "01f1b7b1764a1a04adc67a648599a233",
+  DBX_GENIE_AGENT_ID: "01f1b7b1764a1a04adc67a648599a233",
   VEEVA_SSO_ISSUER: "https://login.example.com/tenant/v2.0",
   VEEVA_SSO_AUDIENCE: "veeva-xpage-client-id",
-  DBX_CLIENT_ID: "client-id",
-  DBX_CLIENT_SECRET: "client-secret",
-  DBX_REDIRECT_URI: "https://broker.example.com/auth/callback",
-  DBX_GENIE_REDIRECT_URL: "https://workspace.example.com/genie/rooms/room-id?o=123",
+  VEEVA_SSO_USERNAME_CLAIM: "email",
+  VEEVA_VAULT_ALLOWED_ORIGINS: "https://vault.example.com",
+  VEEVA_VAULT_API_VERSION: "v26.1",
   STATE_ENCRYPTION_SECRET: "this-is-a-test-secret-with-more-than-thirty-two-bytes",
   ALLOWED_PARENT_ORIGINS: "https://vault.example.com",
 };
 
-test("accepts a fixed Genie redirect on the configured workspace", () => {
-  assert.equal(loadConfig(baseEnv).genieRedirectUrl, "https://workspace.example.com/genie/rooms/room-id?o=123");
-  assert.equal(loadConfig(baseEnv).genieSpaceId, "01f1b7b1764a1a04adc67a648599a233");
+test("loads account-wide user federation configuration without a Databricks client secret", () => {
+  const config = loadConfig(baseEnv);
+  assert.equal(config.genieAgentId, "01f1b7b1764a1a04adc67a648599a233");
+  assert.equal(config.federatedTokenIssuer, "https://login.example.com/tenant/v2.0");
+  assert.deepEqual([...config.federatedTokenAudiences], ["veeva-xpage-client-id"]);
+  assert.equal(config.federatedUsernameClaim, "email");
+  assert.equal(config.brokerSessionTtlMs, 900_000);
 });
 
-test("requires an HTTPS Veeva SSO issuer", () => {
+test("supports more than one accepted audience", () => {
+  const config = loadConfig({
+    ...baseEnv,
+    VEEVA_SSO_AUDIENCE: "",
+    VEEVA_SSO_AUDIENCES: "api://veeva, databricks",
+  });
+  assert.deepEqual([...config.federatedTokenAudiences], ["api://veeva", "databricks"]);
+});
+
+test("defaults the identity mapping to preferred_username", () => {
+  const config = loadConfig({ ...baseEnv, VEEVA_SSO_USERNAME_CLAIM: "" });
+  assert.equal(config.federatedUsernameClaim, "preferred_username");
+});
+
+test("requires an HTTPS token issuer", () => {
   assert.throws(
     () => loadConfig({ ...baseEnv, VEEVA_SSO_ISSUER: "http://login.example.com/tenant/v2.0" }),
     /must use HTTPS/,
   );
 });
 
-test("rejects an iOS redirect to another host", () => {
+test("bounds the encrypted broker session lifetime", () => {
   assert.throws(
-    () => loadConfig({ ...baseEnv, DBX_GENIE_REDIRECT_URL: "https://attacker.example/genie/rooms/room-id" }),
-    /must be an HTTPS URL on DBX_WORKSPACE_HOST/,
+    () => loadConfig({ ...baseEnv, BROKER_SESSION_TTL_SECONDS: "7200" }),
+    /between 60 and 3600/,
   );
 });
 
-test("rejects a same-workspace redirect outside Genie rooms", () => {
+test("requires an HTTPS Vault origin", () => {
   assert.throws(
-    () => loadConfig({ ...baseEnv, DBX_GENIE_REDIRECT_URL: "https://workspace.example.com/other" }),
-    /must point to a full Genie room/,
+    () => loadConfig({ ...baseEnv, VEEVA_VAULT_ALLOWED_ORIGINS: "http://vault.example.com" }),
+    /entries must use HTTPS/,
   );
+});
+
+test("allows opaque native X-Page origins only when explicitly enabled", () => {
+  const config = loadConfig({
+    ...baseEnv,
+    ALLOWED_PARENT_ORIGINS: "",
+    ALLOW_OPAQUE_PARENT_ORIGIN: "true",
+  });
+  assert.equal(config.allowOpaqueParentOrigin, true);
+});
+
+test("allows trusted Veeva HTTPS origins only when explicitly enabled", () => {
+  const config = loadConfig({
+    ...baseEnv,
+    ALLOWED_PARENT_ORIGINS: "",
+    ALLOW_VEEVA_PARENT_ORIGINS: "true",
+  });
+  assert.equal(config.allowVeevaParentOrigins, true);
 });

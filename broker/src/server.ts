@@ -1,6 +1,6 @@
-import { createHash, randomBytes } from "node:crypto";
+import { randomUUID } from "node:crypto";
 import express, { type NextFunction, type Request, type Response } from "express";
-import { rateLimit } from "express-rate-limit";
+import { ipKeyGenerator, rateLimit } from "express-rate-limit";
 import { openApiSession, sealApiSession, type ApiSession } from "./apiSession.js";
 import { loadConfig, type BrokerConfig } from "./config.js";
 import {
@@ -10,14 +10,8 @@ import {
   sanitizeDatabricksJson,
   workspaceUrl,
 } from "./databricks.js";
-import { completionPage, redirectFailurePage } from "./html.js";
-import {
-  openState,
-  sealState,
-  type AuthCarrier,
-  type AuthState,
-  type MessageAuthState,
-} from "./state.js";
+import { proxyClientIp } from "./network.js";
+import { VeevaError, verifyVaultSession } from "./veeva.js";
 
 const config = loadConfig();
 const app = express();
@@ -36,11 +30,23 @@ app.use((_req, res, next) => {
 app.use((req, res, next) => applyCors(req, res, next, config));
 app.use(express.json({ limit: "32kb" }));
 
-app.get("/health", (_req, res) => res.json({ ok: true }));
-app.get("/", (_req, res) => res.type("text/plain").send("Vault CRM headless Genie broker"));
+app.get("/health", (_req, res) => res.json({ ok: true, authorizationMode: "federated_user" }));
+app.get("/", (_req, res) => res.type("text/plain").send("Vault CRM Genie federated-user broker"));
 
-const sessionLimiter = rateLimit({ windowMs: 60_000, limit: 20, standardHeaders: "draft-8", legacyHeaders: false });
-const genieLimiter = rateLimit({ windowMs: 60_000, limit: 180, standardHeaders: "draft-8", legacyHeaders: false });
+const sessionLimiter = rateLimit({
+  windowMs: 60_000,
+  limit: 20,
+  standardHeaders: "draft-8",
+  legacyHeaders: false,
+  keyGenerator: (req) => ipKeyGenerator(proxyClientIp(req.ip)),
+});
+const genieLimiter = rateLimit({
+  windowMs: 60_000,
+  limit: 180,
+  standardHeaders: "draft-8",
+  legacyHeaders: false,
+  keyGenerator: (req) => ipKeyGenerator(proxyClientIp(req.ip)),
+});
 
 app.post("/api/session", sessionLimiter, (req, res) => createApiSession(req, res, config));
 app.get("/api/me", genieLimiter, (req, res) => getApiIdentity(req, res, config));
@@ -72,15 +78,13 @@ app.get(
   (req, res) => listAgentItems(req, res, config),
 );
 
-app.get(
-  "/auth/start",
-  rateLimit({ windowMs: 60_000, limit: 30, standardHeaders: "draft-8", legacyHeaders: false }),
-  (req, res) => startAuthentication(req, res, config),
-);
-app.get("/auth/callback", (req, res) => completeAuthentication(req, res, config));
-
 app.listen(config.port, () => {
-  console.log(`Vault CRM headless Genie broker listening on port ${config.port}`);
+  console.log(JSON.stringify({
+    event: "broker.started",
+    authorizationMode: "federated_user",
+    genieAgentId: config.genieAgentId,
+    port: config.port,
+  }));
 });
 
 function applyCors(req: Request, res: Response, next: NextFunction, current: BrokerConfig): void {
@@ -91,14 +95,22 @@ function applyCors(req: Request, res: Response, next: NextFunction, current: Bro
   }
   const allowed = origin === "null"
     ? current.allowOpaqueParentOrigin
-    : current.allowedParentOrigins.has(origin);
+    : current.allowedParentOrigins.has(origin)
+      || (current.allowVeevaParentOrigins && isVeevaHttpsOrigin(origin));
   if (!allowed) {
+    console.warn(JSON.stringify({
+      event: "security.origin_rejected",
+      timestamp: new Date().toISOString(),
+      origin,
+      method: req.method,
+      path: req.path,
+    }));
     res.status(403).json({ error: "origin_not_allowed" });
     return;
   }
   res.set({
     "Access-Control-Allow-Origin": origin,
-    "Access-Control-Allow-Headers": "Authorization, Content-Type",
+    "Access-Control-Allow-Headers": "Authorization, Content-Type, X-Request-ID",
     "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
     "Access-Control-Max-Age": "600",
   });
@@ -113,15 +125,49 @@ function applyCors(req: Request, res: Response, next: NextFunction, current: Bro
 async function createApiSession(req: Request, res: Response, current: BrokerConfig): Promise<void> {
   try {
     const assertion = typeof req.body?.assertion === "string" ? req.body.assertion : "";
-    if (!assertion) throw new ApiError("missing_external_token", 400);
-    const identity = await exchangeFederatedAssertion(assertion, current);
-    const sessionToken = sealApiSession(identity, current.stateSecret);
+    const vaultSessionId = typeof req.body?.vaultSessionId === "string" ? req.body.vaultSessionId : "";
+    const vaultUrl = typeof req.body?.vaultUrl === "string" ? req.body.vaultUrl : "";
+    if (!assertion || !vaultSessionId || !vaultUrl) {
+      throw new ApiError("missing_authentication_material", 400);
+    }
+
+    const actor = await verifyVaultSession(vaultSessionId, vaultUrl, current);
+    const identity = await exchangeFederatedAssertion(assertion, actor.userName, current);
+    const expiresAt = Math.min(identity.expiresAt, Date.now() + current.brokerSessionTtlMs);
+    if (expiresAt <= Date.now() + 30_000) throw new ApiError("external_token_expired", 401);
+    const session: ApiSession = {
+      accessToken: identity.accessToken,
+      actorUserName: actor.userName,
+      actorDisplayName: actor.displayName,
+      actorSubject: actor.subject,
+      externalUserName: identity.externalUserName,
+      databricksUserName: identity.userName,
+      databricksDisplayName: identity.displayName,
+      sessionId: randomUUID(),
+      expiresAt,
+    };
+    audit("session.created", session, current, requestId(req), {});
     res.json({
-      sessionToken,
-      expiresAt: new Date(identity.expiresAt).toISOString(),
+      sessionToken: sealApiSession(session, current.stateSecret),
+      expiresAt: new Date(expiresAt).toISOString(),
+      authorizationMode: "federated_user",
       user: { userName: identity.userName, displayName: identity.displayName },
+      actor: { userName: actor.userName, displayName: actor.displayName, subject: actor.subject },
+      executionIdentity: {
+        userName: identity.userName,
+        displayName: identity.displayName,
+        externalUserName: identity.externalUserName,
+      },
     });
   } catch (error) {
+    console.warn(JSON.stringify({
+      event: "security.session_rejected",
+      timestamp: new Date().toISOString(),
+      correlationId: requestId(req),
+      origin: req.header("Origin") ?? null,
+      error: publicErrorCode(error),
+      status: publicErrorStatus(error),
+    }));
     sendApiError(res, error);
   }
 }
@@ -130,7 +176,18 @@ function getApiIdentity(req: Request, res: Response, current: BrokerConfig): voi
   try {
     const session = requireApiSession(req, current);
     res.json({
-      user: { userName: session.userName, displayName: session.displayName },
+      authorizationMode: "federated_user",
+      user: { userName: session.databricksUserName, displayName: session.databricksDisplayName },
+      actor: {
+        userName: session.actorUserName,
+        displayName: session.actorDisplayName,
+        subject: session.actorSubject,
+      },
+      executionIdentity: {
+        userName: session.databricksUserName,
+        displayName: session.databricksDisplayName,
+        externalUserName: session.externalUserName,
+      },
       expiresAt: new Date(session.expiresAt).toISOString(),
     });
   } catch (error) {
@@ -142,7 +199,8 @@ async function startChat(req: Request, res: Response, current: BrokerConfig): Pr
   try {
     const session = requireApiSession(req, current);
     const content = parsePrompt(req.body?.content);
-    await proxyJson(res, session, current, `/api/2.0/genie/spaces/${current.genieSpaceId}/start-conversation`, {
+    audit("chat.start", session, current, requestId(req), {});
+    await proxyJson(res, session, current, `/api/2.0/genie/spaces/${current.genieAgentId}/start-conversation`, {
       method: "POST",
       body: JSON.stringify({ content, enable_visualization: req.body?.enableVisualization !== false }),
     });
@@ -156,11 +214,12 @@ async function continueChat(req: Request, res: Response, current: BrokerConfig):
     const session = requireApiSession(req, current);
     const conversationId = parseIdentifier(req.params.conversationId, "conversation_id");
     const content = parsePrompt(req.body?.content);
+    audit("chat.continue", session, current, requestId(req), { conversationId });
     await proxyJson(
       res,
       session,
       current,
-      `/api/2.0/genie/spaces/${current.genieSpaceId}/conversations/${conversationId}/messages`,
+      `/api/2.0/genie/spaces/${current.genieAgentId}/conversations/${conversationId}/messages`,
       {
         method: "POST",
         body: JSON.stringify({ content, enable_visualization: req.body?.enableVisualization !== false }),
@@ -176,11 +235,12 @@ async function getChatMessage(req: Request, res: Response, current: BrokerConfig
     const session = requireApiSession(req, current);
     const conversationId = parseIdentifier(req.params.conversationId, "conversation_id");
     const messageId = parseIdentifier(req.params.messageId, "message_id");
+    audit("chat.message.read", session, current, requestId(req), { conversationId, messageId });
     await proxyJson(
       res,
       session,
       current,
-      `/api/2.0/genie/spaces/${current.genieSpaceId}/conversations/${conversationId}/messages/${messageId}`,
+      `/api/2.0/genie/spaces/${current.genieAgentId}/conversations/${conversationId}/messages/${messageId}`,
     );
   } catch (error) {
     sendApiError(res, error);
@@ -191,11 +251,12 @@ async function getQueryResult(req: Request, res: Response, current: BrokerConfig
   try {
     const session = requireApiSession(req, current);
     const { conversationId, messageId, attachmentId } = parseMessageAttachmentIds(req);
+    audit("chat.query_result.read", session, current, requestId(req), { conversationId, messageId, attachmentId });
     await proxyJson(
       res,
       session,
       current,
-      `/api/2.0/genie/spaces/${current.genieSpaceId}/conversations/${conversationId}/messages/${messageId}/attachments/${attachmentId}/query-result`,
+      `/api/2.0/genie/spaces/${current.genieAgentId}/conversations/${conversationId}/messages/${messageId}/attachments/${attachmentId}/query-result`,
     );
   } catch (error) {
     sendApiError(res, error);
@@ -206,7 +267,8 @@ async function getVisualization(req: Request, res: Response, current: BrokerConf
   try {
     const session = requireApiSession(req, current);
     const { conversationId, messageId, attachmentId } = parseMessageAttachmentIds(req);
-    const name = `spaces/${current.genieSpaceId}/conversations/${conversationId}/messages/${messageId}/attachments/${attachmentId}`;
+    audit("chat.visualization.read", session, current, requestId(req), { conversationId, messageId, attachmentId });
+    const name = `spaces/${current.genieAgentId}/conversations/${conversationId}/messages/${messageId}/attachments/${attachmentId}`;
     const upstream = await databricksFetch(
       workspaceUrl(current, `/api/2.0/genie/${name}/download-visualization`),
       session.accessToken,
@@ -232,11 +294,12 @@ async function listAgentItems(req: Request, res: Response, current: BrokerConfig
     const conversationId = parseIdentifier(req.params.conversationId, "conversation_id");
     const query = new URLSearchParams({ limit: "100", order: "asc" });
     if (typeof req.query.after === "string" && req.query.after) query.set("after", parseIdentifier(req.query.after, "after"));
+    audit("agent.items.read", session, current, requestId(req), { conversationId });
     await proxyJson(
       res,
       session,
       current,
-      `/api/2.0/genie/agents/${current.genieSpaceId}/conversations/${conversationId}/items?${query}`,
+      `/api/2.0/genie/agents/${current.genieAgentId}/conversations/${conversationId}/items?${query}`,
     );
   } catch (error) {
     sendApiError(res, error);
@@ -250,12 +313,13 @@ async function streamAgentResponse(req: Request, res: Response, current: BrokerC
     const conversationId = req.body?.conversationId == null
       ? undefined
       : parseIdentifier(req.body.conversationId, "conversation_id");
+    audit("agent.response.create", session, current, requestId(req), { ...(conversationId ? { conversationId } : {}) });
     const controller = new AbortController();
     res.on("close", () => {
       if (!res.writableEnded) controller.abort();
     });
     const upstream = await databricksFetch(
-      workspaceUrl(current, `/api/2.0/genie/agents/${current.genieSpaceId}/responses`),
+      workspaceUrl(current, `/api/2.0/genie/agents/${current.genieAgentId}/responses`),
       session.accessToken,
       {
         method: "POST",
@@ -356,8 +420,35 @@ function parseMessageAttachmentIds(req: Request): {
   };
 }
 
+function requestId(req: Request): string {
+  const supplied = req.header("X-Request-ID");
+  return supplied && /^[a-z0-9_-]{8,128}$/i.test(supplied) ? supplied : randomUUID();
+}
+
+function audit(
+  action: string,
+  session: ApiSession,
+  current: BrokerConfig,
+  correlationId: string,
+  resource: Record<string, string>,
+): void {
+  console.log(JSON.stringify({
+    event: "genie.audit",
+    timestamp: new Date().toISOString(),
+    authorizationMode: "federated_user",
+    action,
+    correlationId,
+    sessionId: session.sessionId,
+    veevaUser: session.actorUserName,
+    federatedUser: session.externalUserName,
+    databricksPrincipal: session.databricksUserName,
+    genieAgentId: current.genieAgentId,
+    resource,
+  }));
+}
+
 function sendApiError(res: Response, error: unknown): void {
-  if (error instanceof ApiError || error instanceof DatabricksError) {
+  if (error instanceof ApiError || error instanceof DatabricksError || error instanceof VeevaError) {
     res.status(error.status).json({ error: error.code });
     return;
   }
@@ -369,209 +460,33 @@ function sendApiError(res: Response, error: unknown): void {
 }
 
 function publicErrorCode(error: unknown): string {
-  return error instanceof ApiError || error instanceof DatabricksError ? error.code : "stream_failed";
+  return error instanceof ApiError || error instanceof DatabricksError || error instanceof VeevaError
+    ? error.code
+    : "stream_failed";
+}
+
+function publicErrorStatus(error: unknown): number {
+  return error instanceof ApiError || error instanceof DatabricksError || error instanceof VeevaError
+    ? error.status
+    : 500;
+}
+
+function isVeevaHttpsOrigin(origin: string): boolean {
+  try {
+    const url = new URL(origin);
+    if (url.protocol !== "https:" || url.origin !== origin.replace(/\/$/, "")) return false;
+    const hostname = url.hostname.toLowerCase();
+    return hostname === "veevavault.com"
+      || hostname.endsWith(".veevavault.com")
+      || hostname === "veevacrm.com"
+      || hostname.endsWith(".veevacrm.com");
+  } catch {
+    return false;
+  }
 }
 
 class ApiError extends Error {
   constructor(readonly code: string, readonly status: number) {
-    super(code);
-  }
-}
-
-function startAuthentication(req: Request, res: Response, current: BrokerConfig): void {
-  try {
-    const carrier = parseCarrier(req.query.carrier);
-    const verifier = randomBytes(48).toString("base64url");
-    const challenge = createHash("sha256").update(verifier).digest("base64url");
-    const expiresAt = Date.now() + 10 * 60_000;
-    const state: AuthState = carrier === "redirect"
-      ? { verifier, carrier, expiresAt }
-      : {
-          verifier,
-          carrier,
-          parentOrigin: parseParentOrigin(req.query.parent_origin, current),
-          channelId: parseChannelId(req.query.channel_id),
-          expiresAt,
-        };
-    const sealedState = sealState(state, current.stateSecret);
-    const authorize = new URLSearchParams({
-      client_id: current.clientId,
-      redirect_uri: current.redirectUri,
-      response_type: "code",
-      scope: current.oauthScopes,
-      state: sealedState,
-      code_challenge: challenge,
-      code_challenge_method: "S256",
-    });
-    const authorizePath = `/oidc/v1/authorize?${authorize.toString()}`;
-    const nextUrl = Buffer.from(authorizePath, "utf8").toString("base64");
-    res.redirect(302, `${workspaceBase(current)}/aad/auth?next_url=${encodeURIComponent(nextUrl)}`);
-  } catch (error) {
-    const detail = error instanceof Error ? error.message : "invalid_request";
-    res.status(400).json({ error: detail });
-  }
-}
-
-async function completeAuthentication(req: Request, res: Response, current: BrokerConfig): Promise<void> {
-  const stateValue = singleQuery(req.query.state);
-  if (!stateValue) {
-    res.status(400).type("text/plain").send("Missing OAuth state");
-    return;
-  }
-
-  let state: AuthState;
-  try {
-    state = openState(stateValue, current.stateSecret);
-    if (state.carrier !== "redirect") {
-      // Recheck the origin against current policy rather than trusting only the
-      // encrypted value. This makes origin removal take effect immediately.
-      assertParentOriginAllowed(state.parentOrigin, current);
-    }
-  } catch {
-    res.status(400).type("text/plain").send("Invalid or expired OAuth state");
-    return;
-  }
-
-  if (singleQuery(req.query.error)) {
-    sendFailure(res, state, "oauth_denied");
-    return;
-  }
-
-  const code = singleQuery(req.query.code);
-  if (!code) {
-    sendFailure(res, state, "missing_authorization_code");
-    return;
-  }
-
-  try {
-    const token = await exchangeCode(code, state.verifier, current);
-    if (state.carrier === "redirect") {
-      res.redirect(303, current.genieRedirectUrl);
-      return;
-    }
-    const email = await resolveIdentity(token, current);
-    sendCompletion(res, state, true, email, "");
-  } catch (error) {
-    const detail = error instanceof BrokerError ? error.code : "authentication_failed";
-    sendFailure(res, state, detail);
-  }
-}
-
-async function exchangeCode(code: string, verifier: string, current: BrokerConfig): Promise<string> {
-  const body = new URLSearchParams({
-    client_id: current.clientId,
-    client_secret: current.clientSecret,
-    grant_type: "authorization_code",
-    code,
-    redirect_uri: current.redirectUri,
-    code_verifier: verifier,
-  });
-  const response = await fetch(`${workspaceBase(current)}/oidc/v1/token`, {
-    method: "POST",
-    headers: { "Content-Type": "application/x-www-form-urlencoded" },
-    body,
-    signal: AbortSignal.timeout(15_000),
-  });
-  if (!response.ok) throw new BrokerError("token_exchange_failed");
-  const payload = await response.json() as { access_token?: string };
-  if (!payload.access_token) throw new BrokerError("token_exchange_failed");
-  return payload.access_token;
-}
-
-async function resolveIdentity(token: string, current: BrokerConfig): Promise<string | null> {
-  try {
-    const response = await fetch(`${workspaceBase(current)}/api/2.0/preview/scim/v2/Me`, {
-      headers: { Authorization: `Bearer ${token}` },
-      signal: AbortSignal.timeout(10_000),
-    });
-    if (!response.ok) return null;
-    const payload = await response.json() as { userName?: string };
-    return payload.userName ?? null;
-  } catch {
-    // Identity display is optional. A successful token exchange is enough to
-    // establish that the Databricks U2M flow completed.
-    return null;
-  }
-}
-
-function sendCompletion(
-  res: Response,
-  state: MessageAuthState,
-  ok: boolean,
-  email: string | null,
-  detail: string,
-): void {
-  const page = completionPage(state.carrier, state.parentOrigin, {
-    type: "genie-sso:mint-complete",
-    ok,
-    email,
-    detail,
-    channelId: state.channelId,
-  });
-  res.status(200).set({
-    "Content-Type": "text/html; charset=utf-8",
-    "Content-Security-Policy": page.contentSecurityPolicy,
-  }).send(page.html);
-}
-
-function sendFailure(res: Response, state: AuthState, detail: string): void {
-  if (state.carrier !== "redirect") {
-    sendCompletion(res, state, false, null, detail);
-    return;
-  }
-
-  const page = redirectFailurePage();
-  res.status(400).set({
-    "Content-Type": "text/html; charset=utf-8",
-    "Content-Security-Policy": page.contentSecurityPolicy,
-  }).send(page.html);
-}
-
-function parseCarrier(value: unknown): AuthCarrier {
-  const carrier = singleQuery(value);
-  if (carrier !== "iframe" && carrier !== "popup" && carrier !== "redirect") throw new Error("invalid_carrier");
-  return carrier;
-}
-
-function parseChannelId(value: unknown): string {
-  const channelId = singleQuery(value);
-  if (!channelId || !/^[a-z0-9-]{16,64}$/i.test(channelId)) throw new Error("invalid_channel_id");
-  return channelId;
-}
-
-function parseParentOrigin(value: unknown, current: BrokerConfig): string {
-  const origin = singleQuery(value);
-  if (!origin) throw new Error("missing_parent_origin");
-  assertParentOriginAllowed(origin, current);
-  return origin;
-}
-
-function assertParentOriginAllowed(origin: string, current: BrokerConfig): void {
-  if (origin === "opaque") {
-    if (!current.allowOpaqueParentOrigin) throw new Error("opaque_parent_origin_not_allowed");
-    return;
-  }
-  let normalized: string;
-  try {
-    normalized = new URL(origin).origin;
-  } catch {
-    throw new Error("invalid_parent_origin");
-  }
-  if (normalized !== origin || !current.allowedParentOrigins.has(normalized)) {
-    throw new Error("parent_origin_not_allowed");
-  }
-}
-
-function singleQuery(value: unknown): string | undefined {
-  return typeof value === "string" ? value : undefined;
-}
-
-function workspaceBase(current: BrokerConfig): string {
-  return `https://${current.workspaceHost}`;
-}
-
-class BrokerError extends Error {
-  constructor(readonly code: string) {
     super(code);
   }
 }

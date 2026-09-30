@@ -3,10 +3,21 @@ export interface BrokerUser {
   displayName: string | null;
 }
 
+export interface BrokerActor extends BrokerUser {
+  subject: string;
+}
+
+export interface FederatedExecutionIdentity extends BrokerUser {
+  externalUserName: string;
+}
+
 export interface BrokerSession {
   sessionToken: string;
   expiresAt: string;
+  authorizationMode: "federated_user";
   user: BrokerUser;
+  actor: BrokerActor;
+  executionIdentity: FederatedExecutionIdentity;
 }
 
 export interface GenieTextAttachment {

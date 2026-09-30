@@ -15,9 +15,9 @@ Embed a headless, per-user Databricks Genie experience in Veeva Vault CRM for iP
 
 ```text
 Vault CRM X-Page (React/TypeScript)
-  -> Veeva native SSO assertion
-  -> Azure broker (allowlisted Genie routes, encrypted in-memory session)
-  -> Databricks OAuth federation exchange for the individual user
+  -> native Vault session + signed Okta/Entra user assertion
+  -> Azure broker (Vault verification, three-way identity binding, allowlisted Genie routes)
+  -> Databricks account-wide OAuth federation exchange for the individual user
   -> Azure Databricks Genie Space
   -> Unity Catalog synthetic NSCLC patient table
 ```
@@ -37,5 +37,5 @@ Follow `PRODUCT.md` and `DESIGN.md`. The experience is intentionally close to Ge
 
 - Source inspection: `fe-vm-hls-amer.cloud.databricks.com`
 - Target workspace: `adb-7405615520098858.18.azuredatabricks.net`
-- Broker: `af-vault-genie-sso-20260923.azurewebsites.net`
+- Federated-user broker: `af-vault-genie-userfed-eus2.azurewebsites.net`
 - X-Page content package: `artifacts/vault-crm-genie-xpage.zip`

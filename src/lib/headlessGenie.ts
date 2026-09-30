@@ -5,6 +5,7 @@ import type {
   QueryResultResponse,
   StartConversationResponse,
 } from "../types/genie";
+import type { UserFederationCredentials } from "./veeva";
 
 export class BrokerApiError extends Error {
   readonly status: number;
@@ -19,11 +20,15 @@ export class BrokerApiError extends Error {
 
 export async function createBrokerSession(
   brokerBaseUrl: string,
-  assertion: string,
+  credentials: UserFederationCredentials,
 ): Promise<BrokerSession> {
   return request<BrokerSession>(brokerBaseUrl, "/api/session", undefined, {
     method: "POST",
-    body: JSON.stringify({ assertion }),
+    body: JSON.stringify({
+      assertion: credentials.assertion,
+      vaultSessionId: credentials.vaultSession.sessionId,
+      vaultUrl: credentials.vaultSession.vaultUrl,
+    }),
   });
 }
 

@@ -10,7 +10,7 @@ import {
   startChat,
   streamResearch,
 } from "../lib/headlessGenie";
-import { getSSOAssertion } from "../lib/veeva";
+import { getUserFederationCredentials } from "../lib/veeva";
 import type { GenieExperienceMode } from "../types/config";
 import type {
   AgentOutputItem,
@@ -21,7 +21,7 @@ import type {
   QueryResultResponse,
 } from "../types/genie";
 
-type ConnectionPhase = "configuration" | "disconnected" | "connecting" | "ready" | "error";
+type ConnectionPhase = "configuration" | "connecting" | "ready" | "error";
 type MessageState = "working" | "complete" | "error";
 
 interface TableData {
@@ -74,7 +74,7 @@ const terminalStatuses = new Set(["COMPLETED", "FAILED", "CANCELLED", "QUERY_RES
 export function GenieXPage() {
   const [config] = useState(() => getConfig());
   const problems = useMemo(() => configProblems(config), [config]);
-  const [phase, setPhase] = useState<ConnectionPhase>(problems.length ? "configuration" : "disconnected");
+  const [phase, setPhase] = useState<ConnectionPhase>(problems.length ? "configuration" : "connecting");
   const [connectionError, setConnectionError] = useState("");
   const [session, setSession] = useState<BrokerSession>();
   const [mode, setMode] = useState<GenieExperienceMode>(config.defaultMode);
@@ -86,6 +86,8 @@ export function GenieXPage() {
   const endRef = useRef<HTMLDivElement>(null);
   const abortRef = useRef<AbortController | undefined>(undefined);
   const visualUrlsRef = useRef(new Set<string>());
+  const sessionRef = useRef<BrokerSession | undefined>(undefined);
+  const connectionInFlightRef = useRef(false);
 
   useEffect(() => {
     endRef.current?.scrollIntoView({ behavior: "smooth", block: "end" });
@@ -100,22 +102,53 @@ export function GenieXPage() {
     setMessages((current) => current.map((message) => message.id === id ? update(message) : message));
   }, []);
 
-  const connect = useCallback(async () => {
-    setPhase("connecting");
-    setConnectionError("");
-    let assertion = "";
+  const connect = useCallback(async (background = false) => {
+    if (connectionInFlightRef.current) return;
+    connectionInFlightRef.current = true;
+    if (!background) {
+      setPhase("connecting");
+      setConnectionError("");
+    }
+    let credentials: Awaited<ReturnType<typeof getUserFederationCredentials>> | undefined;
     try {
-      assertion = await getSSOAssertion(config.ssoConfigurationName);
-      const nextSession = await createBrokerSession(config.authBrokerBaseUrl, assertion);
+      credentials = await getUserFederationCredentials(config.ssoConfigurationName);
+      const nextSession = await createBrokerSession(config.authBrokerBaseUrl, credentials);
+      sessionRef.current = nextSession;
       setSession(nextSession);
+      setConnectionError("");
       setPhase("ready");
     } catch (error) {
-      setConnectionError(humanizeConnectionError(error));
-      setPhase("error");
+      const current = sessionRef.current;
+      if (!background || !current || Date.parse(current.expiresAt) <= Date.now()) {
+        sessionRef.current = undefined;
+        setSession(undefined);
+        setConnectionError(humanizeConnectionError(error));
+        setPhase("error");
+      }
     } finally {
-      assertion = "";
+      if (credentials) {
+        credentials.assertion = "";
+        credentials.vaultSession.sessionId = "";
+      }
+      connectionInFlightRef.current = false;
     }
   }, [config.authBrokerBaseUrl, config.ssoConfigurationName]);
+
+  useEffect(() => {
+    if (problems.length > 0) return;
+    const timer = window.setTimeout(() => void connect(), 0);
+    return () => window.clearTimeout(timer);
+  }, [connect, problems.length]);
+
+  useEffect(() => {
+    const timer = window.setInterval(() => {
+      const current = sessionRef.current;
+      if (current && Date.parse(current.expiresAt) - Date.now() <= 3 * 60_000) {
+        void connect(true);
+      }
+    }, 60_000);
+    return () => window.clearInterval(timer);
+  }, [connect]);
 
   const resetConversation = useCallback(() => {
     abortRef.current?.abort();
@@ -137,12 +170,14 @@ export function GenieXPage() {
       state: "error",
       status: undefined,
     }));
-    if (error instanceof BrokerApiError && error.status === 401) {
+    if (error instanceof BrokerApiError && ["session_expired", "missing_session"].includes(error.code)) {
+      sessionRef.current = undefined;
       setSession(undefined);
-      setConnectionError("Your secure Databricks session expired. Reconnect to continue as yourself.");
-      setPhase("error");
+      setConnectionError("Your secure Databricks session expired. Vault CRM is reconnecting automatically.");
+      setPhase("connecting");
+      void connect();
     }
-  }, [updateMessage]);
+  }, [connect, updateMessage]);
 
   const runChat = useCallback(async (
     content: string,
@@ -321,7 +356,7 @@ export function GenieXPage() {
           phase={phase}
           error={connectionError}
           problems={problems}
-          onConnect={connect}
+          onConnect={() => void connect()}
         />
       ) : (
         <section className="chat-workspace">
@@ -390,22 +425,23 @@ function ConnectionGate({
       <div className="connection-card">
         <div className="connection-mark" aria-hidden="true"><SparkIcon /></div>
         <p className="eyebrow">Headless Genie · individual authorization</p>
-        <h1>{configuring ? "Finish the X‑Page configuration" : "Connect to clinical Genie"}</h1>
+        <h1>{configuring ? "Finish the X‑Page configuration" : phase === "error" ? "Secure connection unavailable" : "Connecting to clinical Genie"}</h1>
         <p className="connection-copy">
           {configuring
             ? "The application is built, but required runtime values are missing."
-            : "Use your existing Veeva identity to explore the synthetic NSCLC cohort. Databricks evaluates every question with your own Unity Catalog permissions and audit identity."}
+            : "Vault CRM verifies its active session and supplies your signed SSO assertion. Databricks then evaluates every question with your own Unity Catalog permissions and audit identity."}
         </p>
         {problems.length > 0 && <ul className="setup-list">{problems.map((problem) => <li key={problem}>{problem}</li>)}</ul>}
         {error && <div className="error-banner" role="alert">{error}</div>}
-        {!configuring && (
-          <button className="connect-button" type="button" onClick={onConnect} disabled={phase === "connecting"}>
-            {phase === "connecting" ? <><Spinner /> Connecting as you…</> : <><KeyIcon /> Connect securely</>}
+        {phase === "connecting" && <div className="connection-progress"><Spinner /> Connecting as your Databricks user…</div>}
+        {phase === "error" && (
+          <button className="connect-button" type="button" onClick={onConnect}>
+            <KeyIcon /> Retry secure connection
           </button>
         )}
         <div className="trust-row">
+          <span><CheckIcon /> Vault user verified</span>
           <span><CheckIcon /> Per-user RLS</span>
-          <span><CheckIcon /> Short-lived session</span>
           <span><CheckIcon /> No Databricks cookie</span>
         </div>
       </div>
@@ -771,8 +807,20 @@ function humanizeConnectionError(error: unknown): string {
     veeva_sso_unavailable: "The Veeva X‑Pages SSO bridge is unavailable in this context.",
     veeva_sso_timed_out: "Veeva did not complete the SSO request. Try again from inside Vault CRM.",
     veeva_sso_returned_no_token: "Veeva completed SSO but did not return a usable user assertion.",
+    veeva_vault_session_unavailable: "Vault CRM did not expose its native session bridge. Open this page inside the Vault CRM app.",
+    veeva_vault_session_timed_out: "Vault CRM did not return its active session in time. Try reopening the X‑Page.",
+    veeva_vault_session_invalid_response: "Vault CRM returned an incomplete session response.",
+    invalid_vault_session: "The active Vault CRM session could not be verified.",
+    vault_identity_unavailable: "The broker could not verify the Vault CRM user right now.",
+    vault_origin_not_allowed: "This Vault CRM instance is not allowlisted by the broker.",
+    identity_mismatch: "Your Vault, SSO, and Databricks usernames do not match. Ask an administrator to align the identity mapping.",
     federation_rejected: "Databricks rejected the federated user assertion. Check the federation policy and user provisioning.",
     invalid_external_token: "The token did not match the configured Veeva issuer or audience.",
+    missing_user_identity: "The configured username claim was missing from the SSO assertion.",
+    external_token_expired: "The Veeva SSO assertion expired before Databricks could create a session.",
+    identity_resolution_failed: "Databricks exchanged the token but could not resolve the signed-in user.",
+    origin_not_allowed: "This X‑Page origin is not allowlisted by the secure broker.",
+    missing_authentication_material: "Vault CRM did not provide all required authentication material.",
   };
   return labels[error instanceof BrokerApiError ? error.code : message] ?? "The secure connection could not be completed. Please try again.";
 }
