@@ -11,10 +11,11 @@ export interface UserFederationCredentials {
 
 export async function getUserFederationCredentials(
   configurationName: string,
+  oldToken?: string,
 ): Promise<UserFederationCredentials> {
   const vaultSession = await getVaultSession();
   try {
-    const assertion = await getSSOAssertion(configurationName);
+    const assertion = await getSSOAssertion(configurationName, oldToken);
     return { assertion, vaultSession };
   } catch (error) {
     vaultSession.sessionId = "";
@@ -22,12 +23,18 @@ export async function getUserFederationCredentials(
   }
 }
 
-export async function getSSOAssertion(configurationName: string): Promise<string> {
+export async function getSSOAssertion(configurationName: string, oldToken?: string): Promise<string> {
   const ds = await waitForVeevaBridge(5_000);
   if (!ds?.getSSOAccessToken) throw new Error("veeva_sso_unavailable");
 
+  // Veeva can use the previous assertion to refresh or reuse the existing IdP
+  // session instead of starting a new interactive authorization ceremony.
+  // Keep this token in memory only; never persist it in browser storage.
+  const tokenRequest = oldToken
+    ? ds.getSSOAccessToken(configurationName, undefined, oldToken)
+    : ds.getSSOAccessToken(configurationName);
   const result = await withTimeout(
-    Promise.resolve(ds.getSSOAccessToken(configurationName)),
+    Promise.resolve(tokenRequest),
     120_000,
     "veeva_sso_timed_out",
   );
@@ -85,7 +92,17 @@ function findJwt(value: unknown, depth = 0, seen = new WeakSet<object>()): strin
   if (typeof value !== "object" || seen.has(value)) return undefined;
   seen.add(value);
   const record = value as Record<string, unknown>;
-  for (const key of ["accessToken", "access_token", "token", "idToken", "id_token", "data", "result"]) {
+  for (const key of [
+    "ssoToken",
+    "sso_token",
+    "accessToken",
+    "access_token",
+    "token",
+    "idToken",
+    "id_token",
+    "data",
+    "result",
+  ]) {
     const found = findJwt(record[key], depth + 1, seen);
     if (found) return found;
   }

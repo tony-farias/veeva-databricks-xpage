@@ -87,6 +87,7 @@ export function GenieXPage() {
   const abortRef = useRef<AbortController | undefined>(undefined);
   const visualUrlsRef = useRef(new Set<string>());
   const sessionRef = useRef<BrokerSession | undefined>(undefined);
+  const previousAssertionRef = useRef<string | undefined>(undefined);
   const connectionInFlightRef = useRef(false);
 
   useEffect(() => {
@@ -95,6 +96,7 @@ export function GenieXPage() {
 
   useEffect(() => () => {
     abortRef.current?.abort();
+    previousAssertionRef.current = undefined;
     for (const url of visualUrlsRef.current) URL.revokeObjectURL(url);
   }, []);
 
@@ -111,7 +113,18 @@ export function GenieXPage() {
     }
     let credentials: Awaited<ReturnType<typeof getUserFederationCredentials>> | undefined;
     try {
-      credentials = await getUserFederationCredentials(config.ssoConfigurationName);
+      const previousAssertion = previousAssertionRef.current;
+      try {
+        credentials = await getUserFederationCredentials(config.ssoConfigurationName, previousAssertion);
+      } catch (error) {
+        // Automatic renewal must stay non-disruptive. On an explicit retry,
+        // however, fall back once to Veeva's full sign-in path if its old-token
+        // refresh path is no longer usable.
+        if (background || !previousAssertion) throw error;
+        previousAssertionRef.current = undefined;
+        credentials = await getUserFederationCredentials(config.ssoConfigurationName);
+      }
+      previousAssertionRef.current = credentials.assertion;
       const nextSession = await createBrokerSession(config.authBrokerBaseUrl, credentials);
       sessionRef.current = nextSession;
       setSession(nextSession);

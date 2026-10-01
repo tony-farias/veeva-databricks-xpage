@@ -1,9 +1,12 @@
 import type { BrokerConfig } from "./config.js";
+import { sameUserName } from "./identity.js";
 
 export interface VaultActorIdentity {
   userName: string;
   displayName: string | null;
   subject: string;
+  authorizationUserName: string;
+  authorizationSource: "user_name__v" | "federated_id__sys";
 }
 
 export class VeevaError extends Error {
@@ -12,9 +15,10 @@ export class VeevaError extends Error {
   }
 }
 
-export async function verifyVaultSession(
+export async function verifyVaultIdentity(
   sessionId: string,
   vaultUrl: string,
+  externalUserName: string,
   config: BrokerConfig,
 ): Promise<VaultActorIdentity> {
   if (!/^[\x21-\x7e]{16,8192}$/.test(sessionId)) {
@@ -61,11 +65,74 @@ export async function verifyVaultSession(
   const userName = typeof user?.user_name__v === "string" ? user.user_name__v.trim() : "";
   const subject = typeof user?.id === "string" || typeof user?.id === "number" ? String(user.id) : "";
   if (!user || !userName || !subject) throw new VeevaError("vault_identity_unavailable", 502);
+
+  if (sameUserName(userName, externalUserName)) {
+    return {
+      userName,
+      displayName: vaultDisplayName(user),
+      subject,
+      authorizationUserName: userName,
+      authorizationSource: "user_name__v",
+    };
+  }
+
+  const federatedId = await retrieveVaultFederatedId(sessionId, origin, subject, config);
+  if (!federatedId || !sameUserName(federatedId, externalUserName)) {
+    throw new VeevaError("identity_mismatch", 403);
+  }
   return {
     userName,
     displayName: vaultDisplayName(user),
     subject,
+    authorizationUserName: federatedId,
+    authorizationSource: "federated_id__sys",
   };
+}
+
+async function retrieveVaultFederatedId(
+  sessionId: string,
+  origin: string,
+  subject: string,
+  config: BrokerConfig,
+): Promise<string | null> {
+  let response: Response;
+  try {
+    const endpoint = new URL(
+      `/api/${config.veevaVaultApiVersion}/vobjects/user__sys/${encodeURIComponent(subject)}`,
+      origin,
+    );
+    response = await fetch(endpoint, {
+      headers: {
+        Accept: "application/json",
+        Authorization: sessionId,
+      },
+      signal: AbortSignal.timeout(15_000),
+    });
+  } catch {
+    throw new VeevaError("vault_identity_unavailable", 502);
+  }
+  if (response.status === 401) throw new VeevaError("invalid_vault_session", 401);
+  if (!response.ok) throw new VeevaError("vault_identity_unavailable", 502);
+
+  const payload = await response.json().catch(() => ({})) as Record<string, unknown>;
+  if (hasVaultError(payload, "INVALID_SESSION_ID")) {
+    throw new VeevaError("invalid_vault_session", 401);
+  }
+  if (payload.responseStatus !== "SUCCESS") {
+    throw new VeevaError("vault_identity_unavailable", 502);
+  }
+
+  const data = payload.data;
+  if (!data || typeof data !== "object" || Array.isArray(data)) {
+    throw new VeevaError("vault_identity_unavailable", 502);
+  }
+  const record = data as Record<string, unknown>;
+  if (String(record.id ?? "") !== subject) {
+    throw new VeevaError("vault_identity_unavailable", 502);
+  }
+  return typeof record.federated_id__sys === "string" && record.federated_id__sys.trim()
+    ? record.federated_id__sys.trim()
+    : null;
 }
 
 function currentVaultUser(payload: Record<string, unknown>): Record<string, unknown> | undefined {

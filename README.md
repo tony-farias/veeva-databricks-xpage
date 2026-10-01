@@ -2,7 +2,7 @@
 
 A responsive, headless Databricks Genie Agent experience for Veeva Vault CRM X-Pages. It gives users conversational analytics, generated SQL, tabular evidence, visualizations, and Research mode without embedding the Databricks web UI in an iframe.
 
-The application is designed for Vault CRM on iPad. Veeva supplies both its active native session and a signed Okta or Microsoft Entra user JWT through the X-Pages bridge. A small broker verifies the Vault user, exchanges the JWT through Databricks account-wide OAuth federation, and requires the Vault, IdP, and Databricks usernames to match. Unity Catalog permissions and audit attribution therefore remain user-specific.
+The application is designed for Vault CRM on iPad. Veeva supplies both its active native session and a signed Okta or Microsoft Entra user JWT through the X-Pages bridge. A small broker verifies the Vault user, binds either the Vault username or its Federated ID to the IdP identity, and exchanges the JWT through Databricks account-wide OAuth federation. Unity Catalog permissions and audit attribution therefore remain user-specific.
 
 ## What is included
 
@@ -25,7 +25,7 @@ Veeva Vault CRM X-Page
         |
         +-- ds.getVaultSessionId()
         |
-        +-- ds.getSSOAccessToken(...)
+        +-- ds.getSSOAccessToken(..., oldToken)
         v
 Verified Vault user + signed Okta/Entra user assertion
         |
@@ -152,12 +152,17 @@ No Databricks client ID or client secret is required for account-wide user feder
 ## Authentication and authorization
 
 1. The X-Page obtains the active Vault session and a signed user JWT from the named X-Pages SSO Configuration.
-2. The broker validates the session through the allowlisted Vault current-user API.
+2. The broker validates the session through the allowlisted Vault current-user API. It first compares the Vault username and, only on mismatch, retrieves the same user's `federated_id__sys` as the supported alternate identity.
 3. The broker prechecks the JWT issuer, audience, configured username claim, algorithm, and expiration.
 4. The broker sends the JWT to the workspace `/oidc/v1/token` endpoint using RFC 8693 token exchange.
 5. Databricks validates the signature and account federation policy, then returns a token for the mapped user.
-6. The broker resolves Databricks `/Me` and requires all three usernames to match before issuing its encrypted 15-minute session.
+6. The broker resolves Databricks `/Me` and requires the IdP and Databricks usernames to match either the Vault username or its Federated ID before issuing an encrypted session capped at one hour or the upstream token expiry, whichever comes first.
 7. Every Genie Agent API call uses that individual user's server-side token.
+
+The X-Page retains the latest Veeva assertion only in memory and supplies it as
+Veeva's `oldToken` on automatic renewal. This lets Vault CRM reuse or refresh its
+existing IdP session when possible. If an explicit retry cannot use the old-token
+path, the X-Page falls back once to the full Veeva SSO flow.
 
 Consequently, the following continue to apply:
 
@@ -193,7 +198,7 @@ npm test
 
 After deployment, verify:
 
-1. The displayed identity matches the Vault, Okta/Entra, and Databricks user.
+1. The displayed identity matches Databricks and the configured Vault username or Federated ID association.
 2. A chat question returns prose, SQL, rows, and a visualization.
 3. `View data` remains available alongside the chart.
 4. Research mode either completes or reports that the workspace capability is unavailable.

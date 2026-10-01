@@ -1,4 +1,7 @@
 import type { BrokerConfig } from "./config.js";
+import { sameUserName } from "./identity.js";
+
+export { sameUserName } from "./identity.js";
 
 interface JwtHeader {
   alg?: unknown;
@@ -76,6 +79,10 @@ export async function exchangeFederatedAssertion(
   };
 }
 
+export function federatedAssertionUserName(assertion: string, config: BrokerConfig): string {
+  return parseFederatedAssertion(assertion, config).externalUserName;
+}
+
 export async function databricksFetch(
   path: string,
   accessToken: string,
@@ -100,12 +107,6 @@ export function sanitizeDatabricksJson(value: unknown): unknown {
     result[name] = sanitizeDatabricksJson(child);
   }
   return result;
-}
-
-export function sameUserName(...values: string[]): boolean {
-  if (values.length < 2) return true;
-  const expected = canonicalUserName(values[0] ?? "");
-  return Boolean(expected) && values.every((value) => canonicalUserName(value) === expected);
 }
 
 function parseFederatedAssertion(
@@ -189,10 +190,6 @@ function accessTokenExpiry(token: string): number {
   } catch {
     return Number.POSITIVE_INFINITY;
   }
-}
-
-function canonicalUserName(value: string): string {
-  return value.trim().toLowerCase();
 }
 
 function workspaceBase(config: BrokerConfig): string {

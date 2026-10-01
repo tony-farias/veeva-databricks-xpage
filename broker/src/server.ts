@@ -7,11 +7,12 @@ import {
   DatabricksError,
   databricksFetch,
   exchangeFederatedAssertion,
+  federatedAssertionUserName,
   sanitizeDatabricksJson,
   workspaceUrl,
 } from "./databricks.js";
 import { proxyClientIp } from "./network.js";
-import { VeevaError, verifyVaultSession } from "./veeva.js";
+import { VeevaError, verifyVaultIdentity } from "./veeva.js";
 
 const config = loadConfig();
 const app = express();
@@ -131,8 +132,9 @@ async function createApiSession(req: Request, res: Response, current: BrokerConf
       throw new ApiError("missing_authentication_material", 400);
     }
 
-    const actor = await verifyVaultSession(vaultSessionId, vaultUrl, current);
-    const identity = await exchangeFederatedAssertion(assertion, actor.userName, current);
+    const externalUserName = federatedAssertionUserName(assertion, current);
+    const actor = await verifyVaultIdentity(vaultSessionId, vaultUrl, externalUserName, current);
+    const identity = await exchangeFederatedAssertion(assertion, actor.authorizationUserName, current);
     const expiresAt = Math.min(identity.expiresAt, Date.now() + current.brokerSessionTtlMs);
     if (expiresAt <= Date.now() + 30_000) throw new ApiError("external_token_expired", 401);
     const session: ApiSession = {
@@ -146,7 +148,9 @@ async function createApiSession(req: Request, res: Response, current: BrokerConf
       sessionId: randomUUID(),
       expiresAt,
     };
-    audit("session.created", session, current, requestId(req), {});
+    audit("session.created", session, current, requestId(req), {
+      vaultIdentitySource: actor.authorizationSource,
+    });
     res.json({
       sessionToken: sealApiSession(session, current.stateSecret),
       expiresAt: new Date(expiresAt).toISOString(),

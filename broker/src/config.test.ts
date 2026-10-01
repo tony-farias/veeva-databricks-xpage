@@ -20,7 +20,7 @@ test("loads account-wide user federation configuration without a Databricks clie
   assert.equal(config.federatedTokenIssuer, "https://login.example.com/tenant/v2.0");
   assert.deepEqual([...config.federatedTokenAudiences], ["veeva-xpage-client-id"]);
   assert.equal(config.federatedUsernameClaim, "email");
-  assert.equal(config.brokerSessionTtlMs, 900_000);
+  assert.equal(config.brokerSessionTtlMs, 3_600_000);
 });
 
 test("supports more than one accepted audience", () => {

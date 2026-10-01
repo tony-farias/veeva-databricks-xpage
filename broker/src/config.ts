@@ -48,7 +48,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): BrokerConfig {
     throw new Error("STATE_ENCRYPTION_SECRET must contain at least 32 bytes");
   }
 
-  const brokerSessionTtlSeconds = Number(env.BROKER_SESSION_TTL_SECONDS ?? "900");
+  const brokerSessionTtlSeconds = Number(env.BROKER_SESSION_TTL_SECONDS ?? "3600");
   if (!Number.isInteger(brokerSessionTtlSeconds) || brokerSessionTtlSeconds < 60 || brokerSessionTtlSeconds > 3_600) {
     throw new Error("BROKER_SESSION_TTL_SECONDS must be an integer between 60 and 3600");
   }

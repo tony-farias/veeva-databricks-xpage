@@ -8,16 +8,23 @@ It does not use a Databricks OAuth client ID or client secret. Those belong to t
 
 ```text
 Native Vault session -> allowlisted Vault /objects/users/me -> Vault username
+                     -> only on mismatch, current user__sys -> Federated ID
 Veeva SSO JWT        -> issuer/audience/claim precheck     -> IdP username
                      -> Databricks /oidc/v1/token          -> user OAuth token
                      -> Databricks SCIM /Me                -> Databricks username
 
-Require Vault username == IdP username == Databricks username
-                     -> encrypted 15-minute broker session
+Require (Vault username OR Federated ID) == IdP username == Databricks username
+                     -> encrypted broker session (up to one hour)
                      -> allowlisted Genie Agent APIs
 ```
 
-Username comparison trims whitespace and is case-insensitive. It does not rewrite domains, normalize aliases, or use an application-maintained identity map. The IdP claim selected by `VEEVA_SSO_USERNAME_CLAIM` must therefore contain the user's Databricks username.
+Identity comparison trims whitespace and is case-insensitive. The broker first
+compares `user_name__v`. Only when that differs does it retrieve the same verified
+user's `federated_id__sys` and compare it. It does not rewrite domains, normalize
+aliases, or use an application-maintained identity map. The IdP claim selected by
+`VEEVA_SSO_USERNAME_CLAIM` must contain the user's Databricks username, and a
+different Vault login can be associated through the Vault user profile's
+**Federated ID** field.
 
 ## Account federation policy
 
@@ -67,9 +74,9 @@ Keep `STATE_ENCRYPTION_SECRET` in a secret manager or encrypted application sett
 - native Vault session is validated directly against an allowlisted Vault instance
 - only RS256 or ES256 external JWTs with the configured issuer, audience, username claim, and lifetime are submitted for exchange
 - Databricks validates the external JWT signature through its account federation policy
-- Vault, external-token, and Databricks usernames must match before a session is issued
+- either the Vault username or its Federated ID must match the external-token and Databricks usernames before a session is issued
 - Databricks bearer tokens are AES-GCM encrypted and never returned to the X-Page
-- sessions expire no later than either upstream token and are capped at 15 minutes by default
+- sessions expire no later than either upstream token and are capped at one hour by default
 - exact web-origin allowlist plus explicit native/hosted-Veeva opt-ins
 - no token, prompt, request body, SQL, or result logging
 - structured audit correlation identifies the Vault, federated, and Databricks users
