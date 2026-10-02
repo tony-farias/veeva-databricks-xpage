@@ -23,6 +23,18 @@ test("loads the fixed service-principal configuration", () => {
   assert.equal(config.brokerSessionTtlMs, 900_000);
 });
 
+test("derives identity claims from the Vault username by default", () => {
+  assert.equal(loadConfig(baseEnv).identityClaimSource, "user_name");
+  assert.equal(loadConfig({ ...baseEnv, IDENTITY_CLAIM_SOURCE: "federated_id" }).identityClaimSource, "federated_id");
+});
+
+test("rejects an unknown identity claim source", () => {
+  assert.throws(
+    () => loadConfig({ ...baseEnv, IDENTITY_CLAIM_SOURCE: "email" }),
+    /IDENTITY_CLAIM_SOURCE must be user_name or federated_id/,
+  );
+});
+
 test("bounds the application session lifetime", () => {
   assert.throws(
     () => loadConfig({ ...baseEnv, BROKER_SESSION_TTL_SECONDS: "7200" }),

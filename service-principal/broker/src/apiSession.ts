@@ -1,16 +1,19 @@
 import { createCipheriv, createDecipheriv, createHash, randomBytes } from "node:crypto";
+import type { IdentityClaimSource } from "./config.js";
 
 export interface ApiSession {
   accessToken: string;
   actorUserName: string;
   actorDisplayName: string | null;
+  identityClaim: string;
+  identityClaimSource: IdentityClaimSource;
   executionApplicationId: string;
   executionDisplayName: string;
   sessionId: string;
   expiresAt: number;
 }
 
-const VERSION = "sp1";
+const VERSION = "sp2";
 
 export function sealApiSession(session: ApiSession, secret: string): string {
   const iv = randomBytes(12);
@@ -36,6 +39,9 @@ export function openApiSession(value: string, secret: string, now = Date.now()):
       typeof parsed.accessToken !== "string" ||
       typeof parsed.actorUserName !== "string" ||
       (parsed.actorDisplayName !== null && typeof parsed.actorDisplayName !== "string") ||
+      typeof parsed.identityClaim !== "string" ||
+      !parsed.identityClaim ||
+      (parsed.identityClaimSource !== "user_name" && parsed.identityClaimSource !== "federated_id") ||
       typeof parsed.executionApplicationId !== "string" ||
       typeof parsed.executionDisplayName !== "string" ||
       typeof parsed.sessionId !== "string" ||

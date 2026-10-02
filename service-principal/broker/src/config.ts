@@ -1,8 +1,11 @@
+export type IdentityClaimSource = "user_name" | "federated_id";
+
 export interface BrokerConfig {
   workspaceHost: string;
   genieAgentId: string;
   veevaVaultOrigins: ReadonlySet<string>;
   veevaVaultApiVersion: string;
+  identityClaimSource: IdentityClaimSource;
   servicePrincipalClientId: string;
   servicePrincipalClientSecret: string;
   servicePrincipalDisplayName: string;
@@ -26,6 +29,11 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): BrokerConfig {
   const veevaVaultApiVersion = required(env, "VEEVA_VAULT_API_VERSION");
   if (!/^v\d{2}\.\d$/.test(veevaVaultApiVersion)) {
     throw new Error("VEEVA_VAULT_API_VERSION must look like v26.1");
+  }
+
+  const identityClaimSource = env.IDENTITY_CLAIM_SOURCE?.trim() || "user_name";
+  if (identityClaimSource !== "user_name" && identityClaimSource !== "federated_id") {
+    throw new Error("IDENTITY_CLAIM_SOURCE must be user_name or federated_id");
   }
 
   const servicePrincipalClientId = required(env, "DBX_SP_CLIENT_ID");
@@ -59,6 +67,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): BrokerConfig {
     genieAgentId,
     veevaVaultOrigins,
     veevaVaultApiVersion,
+    identityClaimSource,
     servicePrincipalClientId,
     servicePrincipalClientSecret,
     servicePrincipalDisplayName: env.DBX_SP_DISPLAY_NAME?.trim() || servicePrincipalClientId,

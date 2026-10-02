@@ -16,6 +16,7 @@ import type {
   AgentOutputItem,
   AgentResponse,
   BrokerSession,
+  ConversationHandle,
   GenieAttachment,
   GenieMessage,
   QueryResultResponse,
@@ -81,8 +82,8 @@ export function GenieXPage() {
   const [messages, setMessages] = useState<UiMessage[]>([]);
   const [draft, setDraft] = useState("");
   const [busy, setBusy] = useState(false);
-  const [chatConversationId, setChatConversationId] = useState<string>();
-  const [researchConversationId, setResearchConversationId] = useState<string>();
+  const [chatConversation, setChatConversation] = useState<ConversationHandle>();
+  const [researchConversation, setResearchConversation] = useState<ConversationHandle>();
   const endRef = useRef<HTMLDivElement>(null);
   const abortRef = useRef<AbortController | undefined>(undefined);
   const visualUrlsRef = useRef(new Set<string>());
@@ -153,8 +154,8 @@ export function GenieXPage() {
     for (const url of visualUrlsRef.current) URL.revokeObjectURL(url);
     visualUrlsRef.current.clear();
     setMessages([]);
-    setChatConversationId(undefined);
-    setResearchConversationId(undefined);
+    setChatConversation(undefined);
+    setResearchConversation(undefined);
     setBusy(false);
   }, []);
 
@@ -167,6 +168,10 @@ export function GenieXPage() {
       state: "error",
       status: undefined,
     }));
+    if (error instanceof BrokerApiError && error.code === "conversation_not_owned") {
+      setChatConversation(undefined);
+      setResearchConversation(undefined);
+    }
     if (error instanceof BrokerApiError && ["session_expired", "missing_session"].includes(error.code)) {
       sessionRef.current = undefined;
       setSession(undefined);
@@ -181,28 +186,31 @@ export function GenieXPage() {
     assistantId: string,
     activeSession: BrokerSession,
   ) => {
-    let conversationId = chatConversationId;
+    let conversation = chatConversation;
     let messageId: string | undefined;
 
-    if (!conversationId) {
+    if (!conversation) {
       const started = await startChat(config.authBrokerBaseUrl, activeSession.sessionToken, content);
-      conversationId = started.conversation_id
+      const conversationId = started.conversation_id
         ?? started.conversation?.conversation_id
         ?? started.conversation?.id
         ?? started.message?.conversation_id;
       messageId = started.message_id ?? started.message?.message_id ?? started.message?.id;
-      if (conversationId) setChatConversationId(conversationId);
+      if (conversationId && started.conversation_ticket) {
+        conversation = { id: conversationId, ticket: started.conversation_ticket };
+        setChatConversation(conversation);
+      }
     } else {
       const created = await continueChat(
         config.authBrokerBaseUrl,
         activeSession.sessionToken,
-        conversationId,
+        conversation,
         content,
       );
       messageId = created.message_id ?? created.id;
     }
 
-    if (!conversationId || !messageId) throw new Error("genie_missing_conversation");
+    if (!conversation || !messageId) throw new Error("genie_missing_conversation");
     let completed: GenieMessage | undefined;
     let waitMs = 1_200;
     const deadline = Date.now() + 10 * 60_000;
@@ -210,7 +218,7 @@ export function GenieXPage() {
       const message = await getChatMessage(
         config.authBrokerBaseUrl,
         activeSession.sessionToken,
-        conversationId,
+        conversation,
         messageId,
       );
       updateMessage(assistantId, (current) => ({
@@ -228,8 +236,8 @@ export function GenieXPage() {
     if (completed.status !== "COMPLETED") {
       throw new Error(completed.error?.error || completed.error?.type || `genie_${completed.status?.toLowerCase()}`);
     }
-    await hydrateChatMessage(completed, assistantId, activeSession, config.authBrokerBaseUrl, updateMessage, visualUrlsRef.current);
-  }, [chatConversationId, config.authBrokerBaseUrl, updateMessage]);
+    await hydrateChatMessage(completed, conversation, assistantId, activeSession, config.authBrokerBaseUrl, updateMessage, visualUrlsRef.current);
+  }, [chatConversation, config.authBrokerBaseUrl, updateMessage]);
 
   const runResearch = useCallback(async (
     content: string,
@@ -245,14 +253,16 @@ export function GenieXPage() {
       config.authBrokerBaseUrl,
       activeSession.sessionToken,
       content,
-      researchConversationId,
+      researchConversation,
       (event) => {
-        const response = event.response;
-        const conversationId = response?.conversation_id;
-        if (conversationId) {
-          setResearchConversationId(conversationId);
-        }
         const type = event.type ?? "";
+        if (type === "broker.conversation") {
+          if (event.conversation_id && event.conversation_ticket) {
+            setResearchConversation({ id: event.conversation_id, ticket: event.conversation_ticket });
+          }
+          return;
+        }
+        const response = event.response;
         if (type === "response.completed" && response) finalResponse = response;
         if (type === "response.failed" && response) {
           finalResponse = response;
@@ -277,7 +287,7 @@ export function GenieXPage() {
       state: "complete",
       status: undefined,
     }));
-  }, [config.authBrokerBaseUrl, researchConversationId, updateMessage]);
+  }, [config.authBrokerBaseUrl, researchConversation, updateMessage]);
 
   const send = useCallback(async (override?: string) => {
     const content = (override ?? draft).trim();
@@ -363,7 +373,7 @@ export function GenieXPage() {
               <ModeButton active={mode === "chat"} disabled={busy} onClick={() => changeMode("chat")} icon={<ChatIcon />} title="Chat" subtitle="Answers, SQL and charts" />
               <ModeButton active={mode === "research"} disabled={busy} onClick={() => changeMode("research")} icon={<ResearchIcon />} title="Research" subtitle="Multi-step Agent mode analysis" preview />
             </div>
-            <div className="mode-security shared"><ShieldIcon /><span>Databricks runs as <strong>{session?.executionIdentity.displayName}</strong> · Veeva actor: {session?.user.userName}</span></div>
+            <div className="mode-security shared"><ShieldIcon /><span>Databricks runs as <strong>{session?.executionIdentity.displayName}</strong> · Rows scoped to <strong>{session?.dataScope.identityClaim}</strong></span></div>
           </div>
 
           <div className="transcript" aria-live="polite">
@@ -397,7 +407,7 @@ export function GenieXPage() {
               <button className="send-button" type="submit" disabled={!draft.trim() || busy} aria-label="Send question"><SendIcon /></button>
             </div>
             <div className="composer-note">
-              <ShieldIcon /> Shared service-principal permissions apply. Databricks audit records the shared identity; the broker correlates your Veeva user.
+              <ShieldIcon /> Shared service-principal permissions apply, limited to the rows your Veeva identity is entitled to. Databricks audit records the shared identity; the broker correlates your Veeva user.
             </div>
           </form>
         </section>
@@ -427,7 +437,7 @@ function ConnectionGate({
         <p className="connection-copy">
           {configuring
             ? "The application is built, but required runtime values are missing."
-            : "Vault CRM silently verifies its active app session. The broker then uses a fixed Databricks service principal, so there is no separate Databricks or Microsoft sign-in."}
+            : "Vault CRM silently verifies its active app session. The broker then uses a fixed Databricks service principal scoped to your Veeva identity, so there is no separate Databricks or Microsoft sign-in."}
         </p>
         {problems.length > 0 && <ul className="setup-list">{problems.map((problem) => <li key={problem}>{problem}</li>)}</ul>}
         {error && <div className="error-banner" role="alert">{error}</div>}
@@ -439,7 +449,7 @@ function ConnectionGate({
         )}
         <div className="trust-row">
           <span><CheckIcon /> Vault session verified</span>
-          <span><CheckIcon /> Fixed Databricks identity</span>
+          <span><CheckIcon /> Rows scoped to your Veeva identity</span>
           <span><CheckIcon /> Correlated app audit</span>
         </div>
       </div>
@@ -584,6 +594,7 @@ function ResearchOutput({ value }: { value: string }) {
 
 async function hydrateChatMessage(
   message: GenieMessage,
+  conversation: ConversationHandle,
   assistantId: string,
   session: BrokerSession,
   brokerBaseUrl: string,
@@ -633,13 +644,12 @@ async function hydrateChatMessage(
     suggestions: followUps,
   }));
 
-  const conversationId = message.conversation_id;
   const messageId = message.message_id ?? message.id;
   if (!messageId) return;
   await Promise.all([
     ...queries.map(async (query) => {
       try {
-        const result = await getQueryResult(brokerBaseUrl, session.sessionToken, conversationId, messageId, query.attachmentId);
+        const result = await getQueryResult(brokerBaseUrl, session.sessionToken, conversation, messageId, query.attachmentId);
         const table = toTableData(result);
         updateMessage(assistantId, (current) => ({
           ...current,
@@ -654,7 +664,7 @@ async function hydrateChatMessage(
     }),
     ...visuals.map(async (visual) => {
       try {
-        const blob = await getVisualization(brokerBaseUrl, session.sessionToken, conversationId, messageId, visual.attachmentId);
+        const blob = await getVisualization(brokerBaseUrl, session.sessionToken, conversation, messageId, visual.attachmentId);
         if (!blob.type.startsWith("image/") || blob.size === 0) throw new Error("invalid_visualization_payload");
         const url = URL.createObjectURL(blob);
         visualUrls.add(url);
@@ -671,7 +681,7 @@ async function hydrateChatMessage(
     }),
     ...untypedAttachmentIds.map(async (attachmentId) => {
       try {
-        const blob = await getVisualization(brokerBaseUrl, session.sessionToken, conversationId, messageId, attachmentId);
+        const blob = await getVisualization(brokerBaseUrl, session.sessionToken, conversation, messageId, attachmentId);
         if (!blob.type.startsWith("image/") || blob.size === 0) return;
         const url = URL.createObjectURL(blob);
         visualUrls.add(url);
@@ -809,6 +819,8 @@ function humanizeConnectionError(error: unknown): string {
     vault_identity_unavailable: "The broker could not verify the Vault CRM user right now.",
     vault_origin_not_allowed: "This Vault CRM instance is not allowlisted by the broker.",
     service_principal_token_failed: "The broker could not authenticate the shared Databricks service principal.",
+    identity_claim_unavailable: "The broker could not determine which data your Vault CRM user is entitled to. Ask an administrator to check your Vault username or Federated ID.",
+    identity_claim_rejected: "Databricks did not confirm the data scope for your session, so the broker stopped before running any query.",
     origin_not_allowed: "This X‑Page origin is not allowlisted by the secure broker.",
     missing_vault_session: "Vault CRM did not provide an active session to the secure broker.",
   };
@@ -823,6 +835,8 @@ function humanizeApiError(error: unknown): string {
       session_expired: "Your secure session expired. Reconnect to continue.",
       RESOURCE_CONFLICT: "This conversation is already processing another response.",
       RATE_LIMIT_EXCEEDED: "Genie is receiving too many requests. Wait a moment and try again.",
+      conversation_not_owned: "This conversation belongs to a different secure session. Your next question starts a new chat.",
+      data_scope_unavailable: "Databricks could not confirm which rows you are entitled to, so no data was returned.",
     };
     return labels[error.code] ?? error.message ?? "Databricks could not complete this request.";
   }

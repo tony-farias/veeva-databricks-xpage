@@ -4,13 +4,19 @@ import { rateLimit } from "express-rate-limit";
 import { openApiSession, sealApiSession, type ApiSession } from "./apiSession.js";
 import { loadConfig, type BrokerConfig } from "./config.js";
 import {
+  conversationTicketInjector,
+  hasConversationTicket,
+  issueConversationTicket,
+  type TicketScope,
+} from "./conversationTicket.js";
+import {
   DatabricksError,
   databricksFetch,
   getServicePrincipalIdentity,
   sanitizeDatabricksJson,
-  verifyVaultSession,
   workspaceUrl,
 } from "./databricks.js";
+import { VeevaError, verifyVaultIdentity } from "./veeva.js";
 
 const config = loadConfig();
 const app = express();
@@ -29,7 +35,7 @@ app.use((_req, res, next) => {
 app.use((req, res, next) => applyCors(req, res, next, config));
 app.use(express.json({ limit: "32kb" }));
 
-app.get("/health", (_req, res) => res.json({ ok: true, authorizationMode: "service_principal" }));
+app.get("/health", (_req, res) => res.json({ ok: true, authorizationMode: "service_principal", dataScope: "identity_claim" }));
 app.get("/", (_req, res) => res.type("text/plain").send("Vault CRM Genie service-principal broker"));
 
 const sessionLimiter = rateLimit({ windowMs: 60_000, limit: 20, standardHeaders: "draft-8", legacyHeaders: false });
@@ -71,6 +77,7 @@ app.listen(config.port, () => {
     authorizationMode: "service_principal",
     genieAgentId: config.genieAgentId,
     servicePrincipal: config.servicePrincipalClientId,
+    identityClaimSource: config.identityClaimSource,
     port: config.port,
   }));
 });
@@ -98,7 +105,7 @@ function applyCors(req: Request, res: Response, next: NextFunction, current: Bro
   }
   res.set({
     "Access-Control-Allow-Origin": origin,
-    "Access-Control-Allow-Headers": "Authorization, Content-Type, X-Request-ID",
+    "Access-Control-Allow-Headers": "Authorization, Content-Type, X-Conversation-Ticket, X-Request-ID",
     "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
     "Access-Control-Max-Age": "600",
   });
@@ -115,16 +122,16 @@ async function createApiSession(req: Request, res: Response, current: BrokerConf
     const vaultSessionId = typeof req.body?.vaultSessionId === "string" ? req.body.vaultSessionId : "";
     const vaultUrl = typeof req.body?.vaultUrl === "string" ? req.body.vaultUrl : "";
     if (!vaultSessionId || !vaultUrl) throw new ApiError("missing_vault_session", 400);
-    const [actor, execution] = await Promise.all([
-      verifyVaultSession(vaultSessionId, vaultUrl, current),
-      getServicePrincipalIdentity(current),
-    ]);
+    const actor = await verifyVaultIdentity(vaultSessionId, vaultUrl, current);
+    const execution = await getServicePrincipalIdentity(current, actor.identityClaim);
     const expiresAt = Math.min(execution.expiresAt, Date.now() + current.brokerSessionTtlMs);
     if (expiresAt <= Date.now() + 30_000) throw new ApiError("external_token_expired", 401);
     const session: ApiSession = {
       accessToken: execution.accessToken,
       actorUserName: actor.userName,
       actorDisplayName: actor.displayName,
+      identityClaim: actor.identityClaim,
+      identityClaimSource: actor.identityClaimSource,
       executionApplicationId: execution.applicationId,
       executionDisplayName: execution.displayName,
       sessionId: randomUUID(),
@@ -140,6 +147,7 @@ async function createApiSession(req: Request, res: Response, current: BrokerConf
         applicationId: execution.applicationId,
         displayName: execution.displayName,
       },
+      dataScope: dataScope(session),
     });
   } catch (error) {
     console.warn(JSON.stringify({
@@ -164,6 +172,7 @@ function getApiIdentity(req: Request, res: Response, current: BrokerConfig): voi
         displayName: session.executionDisplayName,
       },
       authorizationMode: "service_principal",
+      dataScope: dataScope(session),
       expiresAt: new Date(session.expiresAt).toISOString(),
     });
   } catch (error) {
@@ -176,10 +185,21 @@ async function startChat(req: Request, res: Response, current: BrokerConfig): Pr
     const session = requireApiSession(req, current);
     const content = parsePrompt(req.body?.content);
     audit("chat.start", session, current, requestId(req), {});
-    await proxyJson(res, session, current, `/api/2.0/genie/spaces/${current.genieAgentId}/start-conversation`, {
-      method: "POST",
-      body: JSON.stringify({ content, enable_visualization: req.body?.enableVisualization !== false }),
-    });
+    await proxyJson(
+      res,
+      session,
+      current,
+      `/api/2.0/genie/spaces/${current.genieAgentId}/start-conversation`,
+      {
+        method: "POST",
+        body: JSON.stringify({ content, enable_visualization: req.body?.enableVisualization !== false }),
+      },
+      (payload) => {
+        const conversationId = startedConversationId(payload);
+        if (!conversationId) throw new ApiError("genie_missing_conversation", 502);
+        return { ...payload, conversation_ticket: issueConversationTicket(conversationId, ticketScope(session, current)) };
+      },
+    );
   } catch (error) {
     sendApiError(res, error);
   }
@@ -188,7 +208,7 @@ async function startChat(req: Request, res: Response, current: BrokerConfig): Pr
 async function continueChat(req: Request, res: Response, current: BrokerConfig): Promise<void> {
   try {
     const session = requireApiSession(req, current);
-    const conversationId = parseIdentifier(req.params.conversationId, "conversation_id");
+    const conversationId = requireConversation(req, req.params.conversationId, session, current);
     const content = parsePrompt(req.body?.content);
     audit("chat.continue", session, current, requestId(req), { conversationId });
     await proxyJson(
@@ -209,14 +229,29 @@ async function continueChat(req: Request, res: Response, current: BrokerConfig):
 async function getChatMessage(req: Request, res: Response, current: BrokerConfig): Promise<void> {
   try {
     const session = requireApiSession(req, current);
-    const conversationId = parseIdentifier(req.params.conversationId, "conversation_id");
+    const conversationId = requireConversation(req, req.params.conversationId, session, current);
     const messageId = parseIdentifier(req.params.messageId, "message_id");
-    audit("chat.message.read", session, current, requestId(req), { conversationId, messageId });
+    const correlationId = requestId(req);
+    audit("chat.message.read", session, current, correlationId, { conversationId, messageId });
     await proxyJson(
       res,
       session,
       current,
       `/api/2.0/genie/spaces/${current.genieAgentId}/conversations/${conversationId}/messages/${messageId}`,
+      {},
+      (payload) => {
+        // Query history names only the service principal. Logging the statement
+        // IDs once per finished message lets audits join them to the Veeva user.
+        const statementIds = completedStatementIds(payload);
+        if (statementIds.length) {
+          audit("chat.statements", session, current, correlationId, {
+            conversationId,
+            messageId,
+            statementIds: statementIds.join(","),
+          });
+        }
+        return payload;
+      },
     );
   } catch (error) {
     sendApiError(res, error);
@@ -226,7 +261,7 @@ async function getChatMessage(req: Request, res: Response, current: BrokerConfig
 async function getQueryResult(req: Request, res: Response, current: BrokerConfig): Promise<void> {
   try {
     const session = requireApiSession(req, current);
-    const ids = parseMessageAttachmentIds(req);
+    const ids = parseMessageAttachmentIds(req, session, current);
     audit("chat.query_result.read", session, current, requestId(req), ids);
     await proxyJson(
       res,
@@ -242,7 +277,7 @@ async function getQueryResult(req: Request, res: Response, current: BrokerConfig
 async function getVisualization(req: Request, res: Response, current: BrokerConfig): Promise<void> {
   try {
     const session = requireApiSession(req, current);
-    const ids = parseMessageAttachmentIds(req);
+    const ids = parseMessageAttachmentIds(req, session, current);
     audit("chat.visualization.read", session, current, requestId(req), ids);
     const name = `spaces/${current.genieAgentId}/conversations/${ids.conversationId}/messages/${ids.messageId}/attachments/${ids.attachmentId}`;
     const upstream = await databricksFetch(
@@ -267,7 +302,7 @@ async function getVisualization(req: Request, res: Response, current: BrokerConf
 async function listAgentItems(req: Request, res: Response, current: BrokerConfig): Promise<void> {
   try {
     const session = requireApiSession(req, current);
-    const conversationId = parseIdentifier(req.params.conversationId, "conversation_id");
+    const conversationId = requireConversation(req, req.params.conversationId, session, current);
     const query = new URLSearchParams({ limit: "100", order: "asc" });
     if (typeof req.query.after === "string" && req.query.after) query.set("after", parseIdentifier(req.query.after, "after"));
     audit("agent.items.read", session, current, requestId(req), { conversationId });
@@ -288,7 +323,7 @@ async function streamAgentResponse(req: Request, res: Response, current: BrokerC
     const content = parsePrompt(req.body?.content);
     const conversationId = req.body?.conversationId == null
       ? undefined
-      : parseIdentifier(req.body.conversationId, "conversation_id");
+      : requireConversation(req, req.body.conversationId, session, current);
     audit("agent.response.create", session, current, requestId(req), { ...(conversationId ? { conversationId } : {}) });
     const controller = new AbortController();
     res.on("close", () => {
@@ -319,10 +354,24 @@ async function streamAgentResponse(req: Request, res: Response, current: BrokerC
     });
     res.flushHeaders();
     const reader = upstream.body.getReader();
-    while (true) {
-      const { done, value } = await reader.read();
-      if (done) break;
-      if (!res.write(Buffer.from(value))) await new Promise<void>((resolve) => res.once("drain", resolve));
+    const write = async (chunk: string | Buffer) => {
+      if (chunk.length && !res.write(chunk)) await new Promise<void>((resolve) => res.once("drain", resolve));
+    };
+    if (conversationId) {
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        await write(Buffer.from(value));
+      }
+    } else {
+      const decoder = new TextDecoder();
+      const injector = conversationTicketInjector((id) => issueConversationTicket(id, ticketScope(session, current)));
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        await write(injector.push(decoder.decode(value, { stream: true })));
+      }
+      await write(injector.push(decoder.decode()) + injector.flush());
     }
     res.end();
   } catch (error) {
@@ -341,6 +390,7 @@ async function proxyJson(
   current: BrokerConfig,
   path: string,
   init: RequestInit = {},
+  transform?: (payload: Record<string, unknown>) => Record<string, unknown>,
 ): Promise<void> {
   const upstream = await databricksFetch(workspaceUrl(current, path), session.accessToken, init);
   if (!upstream.ok) {
@@ -348,7 +398,8 @@ async function proxyJson(
     return;
   }
   const payload = sanitizeDatabricksJson(await upstream.json());
-  res.status(upstream.status).json(payload);
+  const isObject = payload !== null && typeof payload === "object" && !Array.isArray(payload);
+  res.status(upstream.status).json(transform && isObject ? transform(payload as Record<string, unknown>) : payload);
 }
 
 async function sendUpstreamFailure(res: Response, upstream: globalThis.Response): Promise<void> {
@@ -359,6 +410,10 @@ async function sendUpstreamFailure(res: Response, upstream: globalThis.Response)
       ? payload.error
       : "databricks_request_failed";
   const message = typeof payload.message === "string" ? payload.message.slice(0, 1_000) : undefined;
+  if (message?.includes("OAUTH_CUSTOM_IDENTITY_CLAIM_NOT_PROVIDED")) {
+    res.status(upstream.status).json({ error: "data_scope_unavailable" });
+    return;
+  }
   res.status(upstream.status).json({ error: code, ...(message ? { message } : {}) });
 }
 
@@ -384,16 +439,60 @@ function parseIdentifier(value: unknown, name: string): string {
   return encodeURIComponent(value);
 }
 
-function parseMessageAttachmentIds(req: Request): {
+function parseMessageAttachmentIds(req: Request, session: ApiSession, current: BrokerConfig): {
   conversationId: string;
   messageId: string;
   attachmentId: string;
 } {
   return {
-    conversationId: parseIdentifier(req.params.conversationId, "conversation_id"),
+    conversationId: requireConversation(req, req.params.conversationId, session, current),
     messageId: parseIdentifier(req.params.messageId, "message_id"),
     attachmentId: parseIdentifier(req.params.attachmentId, "attachment_id"),
   };
+}
+
+function requireConversation(
+  req: Request,
+  value: unknown,
+  session: ApiSession,
+  current: BrokerConfig,
+): string {
+  const conversationId = parseIdentifier(value, "conversation_id");
+  if (!hasConversationTicket(req.header("X-Conversation-Ticket"), conversationId, ticketScope(session, current))) {
+    console.warn(JSON.stringify({
+      event: "security.conversation_rejected",
+      timestamp: new Date().toISOString(),
+      sessionId: session.sessionId,
+      veevaUser: session.actorUserName,
+      conversationId,
+    }));
+    throw new ApiError("conversation_not_owned", 403);
+  }
+  return conversationId;
+}
+
+function ticketScope(session: ApiSession, current: BrokerConfig): TicketScope {
+  return { genieAgentId: current.genieAgentId, identityClaim: session.identityClaim, secret: current.stateSecret };
+}
+
+function dataScope(session: ApiSession): { mode: "identity_claim"; source: string; identityClaim: string } {
+  return { mode: "identity_claim", source: session.identityClaimSource, identityClaim: session.identityClaim };
+}
+
+function startedConversationId(payload: Record<string, unknown>): string | undefined {
+  const conversation = payload.conversation as Record<string, unknown> | undefined;
+  const message = payload.message as Record<string, unknown> | undefined;
+  const candidate = payload.conversation_id ?? conversation?.conversation_id ?? conversation?.id ?? message?.conversation_id;
+  return typeof candidate === "string" && /^[a-z0-9_-]{8,160}$/i.test(candidate) ? candidate : undefined;
+}
+
+function completedStatementIds(payload: Record<string, unknown>): string[] {
+  if (payload.status !== "COMPLETED" && payload.status !== "FAILED") return [];
+  if (!Array.isArray(payload.attachments)) return [];
+  return payload.attachments.flatMap((attachment) => {
+    const query = (attachment as Record<string, unknown> | null)?.query as Record<string, unknown> | undefined;
+    return typeof query?.statement_id === "string" ? [query.statement_id] : [];
+  });
 }
 
 function requestId(req: Request): string {
@@ -415,6 +514,7 @@ function audit(
     correlationId,
     sessionId: session.sessionId,
     veevaUser: session.actorUserName,
+    identityClaim: session.identityClaim,
     databricksPrincipal: session.executionApplicationId,
     genieAgentId: current.genieAgentId,
     resource,
@@ -422,7 +522,7 @@ function audit(
 }
 
 function sendApiError(res: Response, error: unknown): void {
-  if (error instanceof ApiError || error instanceof DatabricksError) {
+  if (isPublicError(error)) {
     res.status(error.status).json({ error: error.code });
     return;
   }
@@ -434,11 +534,15 @@ function sendApiError(res: Response, error: unknown): void {
 }
 
 function publicErrorCode(error: unknown): string {
-  return error instanceof ApiError || error instanceof DatabricksError ? error.code : "stream_failed";
+  return isPublicError(error) ? error.code : "stream_failed";
 }
 
 function publicErrorStatus(error: unknown): number {
-  return error instanceof ApiError || error instanceof DatabricksError ? error.status : 500;
+  return isPublicError(error) ? error.status : 500;
+}
+
+function isPublicError(error: unknown): error is ApiError | DatabricksError | VeevaError {
+  return error instanceof ApiError || error instanceof DatabricksError || error instanceof VeevaError;
 }
 
 function isVeevaHttpsOrigin(origin: string): boolean {

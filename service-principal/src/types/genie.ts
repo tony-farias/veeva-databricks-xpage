@@ -8,12 +8,26 @@ export interface ExecutionIdentity {
   displayName: string;
 }
 
+export interface DataScope {
+  mode: "identity_claim";
+  source: "user_name" | "federated_id";
+  identityClaim: string;
+}
+
 export interface BrokerSession {
   sessionToken: string;
   expiresAt: string;
   authorizationMode: "service_principal";
   user: BrokerUser;
   executionIdentity: ExecutionIdentity;
+  dataScope: DataScope;
+}
+
+// The broker binds each Genie conversation to the identity claim that started
+// it. Every follow-up call must present the ticket it issued.
+export interface ConversationHandle {
+  id: string;
+  ticket: string;
 }
 
 export interface GenieTextAttachment {
@@ -56,6 +70,7 @@ export interface GenieMessage {
 
 export interface StartConversationResponse {
   conversation_id?: string;
+  conversation_ticket?: string;
   message_id?: string;
   conversation?: { conversation_id?: string; id?: string };
   message?: GenieMessage;
@@ -114,6 +129,8 @@ export interface AgentResponse {
 export interface AgentStreamEvent {
   type?: string;
   sequence_number?: number;
+  conversation_id?: string;
+  conversation_ticket?: string;
   item?: AgentOutputItem;
   response?: AgentResponse;
   [key: string]: unknown;

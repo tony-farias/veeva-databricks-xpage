@@ -1,6 +1,7 @@
 import type {
   AgentStreamEvent,
   BrokerSession,
+  ConversationHandle,
   GenieMessage,
   QueryResultResponse,
   StartConversationResponse,
@@ -45,55 +46,61 @@ export async function startChat(
 export async function continueChat(
   brokerBaseUrl: string,
   sessionToken: string,
-  conversationId: string,
+  conversation: ConversationHandle,
   content: string,
 ): Promise<GenieMessage> {
   return request(
     brokerBaseUrl,
-    `/api/genie/chat/conversations/${encodeURIComponent(conversationId)}/messages`,
+    `/api/genie/chat/conversations/${encodeURIComponent(conversation.id)}/messages`,
     sessionToken,
-    { method: "POST", body: JSON.stringify({ content, enableVisualization: true }) },
+    {
+      method: "POST",
+      headers: ticketHeader(conversation),
+      body: JSON.stringify({ content, enableVisualization: true }),
+    },
   );
 }
 
 export async function getChatMessage(
   brokerBaseUrl: string,
   sessionToken: string,
-  conversationId: string,
+  conversation: ConversationHandle,
   messageId: string,
 ): Promise<GenieMessage> {
   return request(
     brokerBaseUrl,
-    `/api/genie/chat/conversations/${encodeURIComponent(conversationId)}/messages/${encodeURIComponent(messageId)}`,
+    `/api/genie/chat/conversations/${encodeURIComponent(conversation.id)}/messages/${encodeURIComponent(messageId)}`,
     sessionToken,
+    { headers: ticketHeader(conversation) },
   );
 }
 
 export async function getQueryResult(
   brokerBaseUrl: string,
   sessionToken: string,
-  conversationId: string,
+  conversation: ConversationHandle,
   messageId: string,
   attachmentId: string,
 ): Promise<QueryResultResponse> {
   return request(
     brokerBaseUrl,
-    `/api/genie/chat/conversations/${encodeURIComponent(conversationId)}/messages/${encodeURIComponent(messageId)}/attachments/${encodeURIComponent(attachmentId)}/query-result`,
+    `/api/genie/chat/conversations/${encodeURIComponent(conversation.id)}/messages/${encodeURIComponent(messageId)}/attachments/${encodeURIComponent(attachmentId)}/query-result`,
     sessionToken,
+    { headers: ticketHeader(conversation) },
   );
 }
 
 export async function getVisualization(
   brokerBaseUrl: string,
   sessionToken: string,
-  conversationId: string,
+  conversation: ConversationHandle,
   messageId: string,
   attachmentId: string,
 ): Promise<Blob> {
   const response = await fetch(
-    `${brokerBaseUrl}/api/genie/chat/conversations/${encodeURIComponent(conversationId)}/messages/${encodeURIComponent(messageId)}/attachments/${encodeURIComponent(attachmentId)}/visualization`,
+    `${brokerBaseUrl}/api/genie/chat/conversations/${encodeURIComponent(conversation.id)}/messages/${encodeURIComponent(messageId)}/attachments/${encodeURIComponent(attachmentId)}/visualization`,
     {
-      headers: { Authorization: `Bearer ${sessionToken}` },
+      headers: { Authorization: `Bearer ${sessionToken}`, ...ticketHeader(conversation) },
       cache: "no-store",
       mode: "cors",
     },
@@ -106,7 +113,7 @@ export async function streamResearch(
   brokerBaseUrl: string,
   sessionToken: string,
   content: string,
-  conversationId: string | undefined,
+  conversation: ConversationHandle | undefined,
   onEvent: (event: AgentStreamEvent) => void,
   signal?: AbortSignal,
 ): Promise<void> {
@@ -116,8 +123,9 @@ export async function streamResearch(
       Authorization: `Bearer ${sessionToken}`,
       "Content-Type": "application/json",
       Accept: "text/event-stream",
+      ...(conversation ? ticketHeader(conversation) : {}),
     },
-    body: JSON.stringify({ content, ...(conversationId ? { conversationId } : {}) }),
+    body: JSON.stringify({ content, ...(conversation ? { conversationId: conversation.id } : {}) }),
     cache: "no-store",
     mode: "cors",
     signal,
@@ -156,6 +164,10 @@ async function request<T>(
   });
   if (!response.ok) throw await responseError(response);
   return response.json() as Promise<T>;
+}
+
+function ticketHeader(conversation: ConversationHandle): Record<string, string> {
+  return { "X-Conversation-Ticket": conversation.ticket };
 }
 
 async function responseError(response: Response): Promise<BrokerApiError> {

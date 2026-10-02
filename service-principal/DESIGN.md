@@ -65,7 +65,7 @@ components:
 
 The interface is a wide, quiet analytical notebook in which a question, explanation, chart, and evidence read as one continuous page. Databricks Genie is the primary visual reference; Veeva contributes context and identity without wrapping the conversation in a second dashboard.
 
-The shared-identity version uses the same notebook language but explicitly labels both actors: the signed-in Veeva user and the fixed Databricks execution identity. Shared authorization is a semantic state, not a warning treatment or decorative theme.
+The shared-identity version uses the same notebook language but explicitly labels both actors and the data scope: the signed-in Veeva user, the fixed Databricks execution identity, and the identity claim that limits rows. Shared authorization is a semantic state, not a warning treatment or decorative theme.
 
 The system is precise, calm, and trustworthy. It rejects the PRODUCT.md anti-references—generic SaaS card dashboards, glassmorphism and decorative gradients, teal-heavy enterprise styling unrelated to Databricks Genie, dense developer consoles presented to clinical users, and decorative animation that competes with analysis.
 

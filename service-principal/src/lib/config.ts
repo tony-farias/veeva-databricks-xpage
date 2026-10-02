@@ -7,7 +7,7 @@ const defaults: ResolvedGenieXPageConfig = {
   authBrokerBaseUrl: "",
   defaultMode: "chat",
   displayName: "NSCLC RWE · HEOR Cohort Explorer",
-  contextLabel: "Synthetic clinical data · shared Databricks identity",
+  contextLabel: "Synthetic clinical data · rows scoped to your Veeva identity",
 };
 
 export function getConfig(): ResolvedGenieXPageConfig {
