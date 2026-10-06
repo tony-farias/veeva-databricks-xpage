@@ -44,5 +44,5 @@ FROM af_vault_genie_demo.nsclc_rwe.gold_patient_master;
 -- The runtime service principal reaches the data only through the scoped view.
 -- ops/apply-claim-scoped-view.mjs grants SELECT on that view; it receives no
 -- access to the entitlement or site tables.
-GRANT USE CATALOG ON CATALOG af_vault_genie_demo TO `7cf9fe9b-c14f-4b9f-8fcf-a094f0421c7b`;
-GRANT USE SCHEMA ON SCHEMA af_vault_genie_demo.nsclc_rwe_scoped TO `7cf9fe9b-c14f-4b9f-8fcf-a094f0421c7b`;
+GRANT USE CATALOG ON CATALOG af_vault_genie_demo TO `6d18456b-9dba-4ca9-9e65-d2843df4dd7a`;
+GRANT USE SCHEMA ON SCHEMA af_vault_genie_demo.nsclc_rwe_scoped TO `6d18456b-9dba-4ca9-9e65-d2843df4dd7a`;

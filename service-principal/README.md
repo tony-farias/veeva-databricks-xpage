@@ -43,11 +43,11 @@ The broker binds each conversation to the claim that started it:
 
 | Resource | Value |
 | --- | --- |
-| Workspace | `adb-7405615520098858.18.azuredatabricks.net` |
-| Genie Agent | `01f1bda165d9188a9d8121be0cc3a9b4` (claim-scoped copy of `01f1b959138b1575a09b54923fa27532`, which the per-user implementation keeps using) |
-| SQL warehouse | `9515e3337e0471aa` |
+| Workspace | `adb-7405608383447105.5.azuredatabricks.net` |
+| Genie Agent | `01f1c1bc36b518d7b7a59b21c1bd3b92` (claim-scoped) |
+| SQL warehouse | `befedd56fadee1fa` |
 | Service principal | `veeva-xpage-genie-shared` |
-| Application ID | `7cf9fe9b-c14f-4b9f-8fcf-a094f0421c7b` |
+| Application ID | `6d18456b-9dba-4ca9-9e65-d2843df4dd7a` |
 | Curated table | `af_vault_genie_demo.nsclc_rwe.gold_patient_master` |
 | Claim-scoped view | `af_vault_genie_demo.nsclc_rwe_scoped.gold_patient_master_scoped` |
 | Identity claim source | `federated_id` (`antonio.farias@databricks.com`) |
@@ -130,11 +130,11 @@ Set up the demo in this order:
 2. Create the view. Databricks evaluates the claim function while creating any object that references it, so neither the SQL editor nor a SQL UDF wrapper can create it. Give an administration service principal `CREATE TABLE` on `af_vault_genie_demo.nsclc_rwe_scoped` and `SELECT` on `gold_patient_master`, `user_entitlements`, and `patient_care_site`, then run:
 
    ```bash
-   DBX_WORKSPACE_HOST=adb-7405615520098858.18.azuredatabricks.net \
-   DBX_WAREHOUSE_ID=9515e3337e0471aa \
+   DBX_WORKSPACE_HOST=adb-7405608383447105.5.azuredatabricks.net \
+   DBX_WAREHOUSE_ID=befedd56fadee1fa \
    DBX_DDL_SP_CLIENT_ID=<admin service principal> \
    DBX_DDL_SP_CLIENT_SECRET=<secret> \
-   DBX_RUNTIME_SP_APPLICATION_ID=7cf9fe9b-c14f-4b9f-8fcf-a094f0421c7b \
+   DBX_RUNTIME_SP_APPLICATION_ID=6d18456b-9dba-4ca9-9e65-d2843df4dd7a \
    VIEW_OWNER=<admin user or group> \
    node ops/apply-claim-scoped-view.mjs
    ```
@@ -144,7 +144,7 @@ Set up the demo in this order:
 4. Cut over by revoking the runtime service principal's direct access to the curated table:
 
    ```sql
-   REVOKE SELECT ON TABLE af_vault_genie_demo.nsclc_rwe.gold_patient_master FROM `7cf9fe9b-c14f-4b9f-8fcf-a094f0421c7b`;
+   REVOKE SELECT ON TABLE af_vault_genie_demo.nsclc_rwe.gold_patient_master FROM `6d18456b-9dba-4ca9-9e65-d2843df4dd7a`;
    ```
 
 Operational consequences:

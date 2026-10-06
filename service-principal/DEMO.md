@@ -38,8 +38,8 @@ Follow `PRODUCT.md` and `DESIGN.md`. The experience is intentionally close to Ge
 
 ## Deployment targets
 
-- Target workspace: `adb-7405615520098858.18.azuredatabricks.net`
-- Genie Agent: `01f1bda165d9188a9d8121be0cc3a9b4`
+- Target workspace: `adb-7405608383447105.5.azuredatabricks.net`
+- Genie Agent: `01f1c1bc36b518d7b7a59b21c1bd3b92`
 - Service principal: `veeva-xpage-genie-shared`
 - Broker: `af-vault-genie-sp-eus2-20260929.azurewebsites.net`
 - X-Page content package: `artifacts/vault-crm-genie-service-principal-xpage.zip`

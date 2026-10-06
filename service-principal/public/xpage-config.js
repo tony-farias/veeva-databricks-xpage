@@ -3,9 +3,9 @@
  * secret. Update authBrokerBaseUrl after deploying the companion broker.
  */
 window.__GENIE_XPAGE_CONFIG__ = Object.freeze({
-  workspaceHost: "adb-7405615520098858.18.azuredatabricks.net",
-  workspaceOrgId: "7405615520098858",
-  genieAgentId: "01f1bda165d9188a9d8121be0cc3a9b4",
+  workspaceHost: "adb-7405608383447105.5.azuredatabricks.net",
+  workspaceOrgId: "7405608383447105",
+  genieAgentId: "01f1c1bc36b518d7b7a59b21c1bd3b92",
   authBrokerBaseUrl: "https://af-vault-genie-sp-eus2-20260929.azurewebsites.net",
   defaultMode: "chat",
   displayName: "NSCLC RWE · HEOR Cohort Explorer",
