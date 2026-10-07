@@ -1,4 +1,15 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import Markdown, { type Components } from "react-markdown";
+import remarkGfm from "remark-gfm";
+import {
+  chartFromItem,
+  citationNumber,
+  parseAgentResponse,
+  recordCall,
+  type CallIndex,
+  type ResearchChart,
+  type ResearchQuery,
+} from "../lib/agentResearch";
 import { configProblems, genieWorkspaceUrl, getConfig } from "../lib/config";
 import {
   BrokerApiError,
@@ -49,6 +60,24 @@ interface VisualCard {
   url?: string;
   loading: boolean;
   error?: string;
+  /** Research mode: the query behind the chart, shown as its View data. */
+  data?: QueryCard;
+}
+
+interface SourceCard extends QueryCard {
+  number: number;
+}
+
+interface StepCard {
+  callId: string;
+  title: string;
+  sql?: string;
+  table?: TableData;
+}
+
+interface ResearchEvidenceData {
+  sources: SourceCard[];
+  steps: StepCard[];
 }
 
 interface UiMessage {
@@ -60,8 +89,7 @@ interface UiMessage {
   status?: string;
   queries?: QueryCard[];
   visuals?: VisualCard[];
-  researchOutputs?: string[];
-  sql?: string[];
+  research?: ResearchEvidenceData;
   suggestions?: string[];
 }
 
@@ -217,8 +245,19 @@ export function GenieXPage() {
   const runResearch = useCallback(async (content: string, assistantId: string) => {
     const controller = new AbortController();
     abortRef.current = controller;
+    let conversation = researchConversation;
     let finalResponse: AgentResponse | undefined;
     let streamError: string | undefined;
+    const calls: CallIndex = new Map();
+    const chartLoads = new Map<string, Promise<void>>();
+    // Charts are fetched as soon as Genie reports them, while the run continues.
+    const showChart = (chart: ResearchChart) => {
+      if (!conversation || chartLoads.has(chart.attachmentId)) return;
+      chartLoads.set(
+        chart.attachmentId,
+        loadResearchChart(chart, conversation, assistantId, client, updateMessage, visualUrlsRef.current),
+      );
+    };
 
     await streamResearch(
       client,
@@ -228,9 +267,15 @@ export function GenieXPage() {
         const type = event.type ?? "";
         if (type === "broker.conversation") {
           if (event.conversation_id && event.conversation_ticket) {
-            setResearchConversation({ id: event.conversation_id, ticket: event.conversation_ticket });
+            conversation = { id: event.conversation_id, ticket: event.conversation_ticket };
+            setResearchConversation(conversation);
           }
           return;
+        }
+        if (event.item) {
+          recordCall(event.item, calls);
+          const chart = chartFromItem(event.item, calls);
+          if (chart) showChart(chart);
         }
         const response = event.response;
         if (type === "response.completed" && response) finalResponse = response;
@@ -248,15 +293,42 @@ export function GenieXPage() {
 
     if (streamError) throw new Error(streamError);
     if (!finalResponse || finalResponse.status !== "completed") throw new Error("research_stream_incomplete");
-    const rendered = renderAgentResponse(finalResponse);
+    const report = parseAgentResponse(finalResponse);
+    for (const chart of report.charts) showChart(chart);
+    const handle = conversation;
+    const canLoad = (query: ResearchQuery) => Boolean(handle && query.messageId);
+    const sources: SourceCard[] = report.sources.map((source) => ({ ...toQueryCard(source, canLoad(source)), number: source.number }));
+    const chartQueries = new Map(report.charts.flatMap((chart) => (chart.query ? [[chart.attachmentId, chart.query] as const] : [])));
     updateMessage(assistantId, (current) => ({
       ...current,
-      content: rendered.answer,
-      researchOutputs: rendered.outputs,
-      sql: rendered.sql,
+      content: report.answer || "The research run completed. Review the sources below.",
+      visuals: current.visuals?.map((visual) => {
+        const query = chartQueries.get(visual.attachmentId);
+        return query ? { ...visual, data: toQueryCard(query, canLoad(query)) } : visual;
+      }),
+      research: { sources, steps: report.steps.map(toStepCard) },
       state: "complete",
       status: undefined,
     }));
+    const updateSource = (callId: string) => (update: (card: QueryCard) => QueryCard) => updateMessage(assistantId, (current) => current.research ? {
+      ...current,
+      research: { ...current.research, sources: current.research.sources.map((card) => card.attachmentId === callId ? { ...card, ...update(card) } : card) },
+    } : current);
+    const updateChartData = (attachmentId: string) => (update: (card: QueryCard) => QueryCard) => updateMessage(assistantId, (current) => ({
+      ...current,
+      visuals: current.visuals?.map((visual) => visual.attachmentId === attachmentId && visual.data ? { ...visual, data: update(visual.data) } : visual),
+    }));
+    await Promise.all([
+      ...chartLoads.values(),
+      ...(handle ? [
+        ...report.sources.flatMap((source) => source.messageId
+          ? [loadQueryData(source, source.messageId, handle, client, updateSource(source.callId))]
+          : []),
+        ...[...chartQueries].flatMap(([attachmentId, query]) => query.messageId
+          ? [loadQueryData(query, query.messageId, handle, client, updateChartData(attachmentId))]
+          : []),
+      ] : []),
+    ]);
   }, [client, researchConversation, updateMessage]);
 
   const send = useCallback(async (override?: string) => {
@@ -481,13 +553,15 @@ function MessageCard({ message, onSuggestion }: { message: UiMessage; onSuggesti
       <div className="assistant-body">
         <div className="assistant-label">Genie {message.mode === "research" ? "Research" : "Chat"}</div>
         {message.state === "working" && <div className="working-line"><Spinner /><span>{message.status || message.content}</span></div>}
-        {message.state !== "working" && <RichText text={message.content} />}
-        {message.researchOutputs?.map((output, index) => <ResearchOutput key={`${message.id}-research-${index}`} value={output} />)}
-        {message.visuals?.map((visual) => <VisualizationCard key={visual.attachmentId} visual={visual} />)}
+        {message.state !== "working" && <RichText text={message.content} onCitation={(number) => openSource(message.id, number)} />}
+        {message.visuals?.map((visual) => (
+          <Fragment key={visual.attachmentId}>
+            <VisualizationCard visual={visual} />
+            {visual.data && <QueryResultCard query={visual.data} hasVisualization />}
+          </Fragment>
+        ))}
         {message.queries?.map((query) => <QueryResultCard key={query.attachmentId} query={query} hasVisualization={Boolean(message.visuals?.some((visual) => visual.url))} />)}
-        {message.sql && message.sql.length > 0 && (
-          <details className="sql-details standalone"><summary>Show code</summary>{message.sql.map((sql, index) => <pre key={index}>{sql}</pre>)}</details>
-        )}
+        {message.research && <ResearchEvidence messageId={message.id} evidence={message.research} />}
         {message.suggestions && message.suggestions.length > 0 && (
           <div className="follow-ups">{message.suggestions.slice(0, 4).map((text) => <button key={text} type="button" onClick={() => onSuggestion(text)}>{text}</button>)}</div>
         )}
@@ -533,33 +607,75 @@ function DataTable({ table }: { table: TableData }) {
   );
 }
 
-function RichText({ text }: { text: string }) {
-  const blocks = text.split(/\n{2,}/).map((block) => block.trim()).filter(Boolean);
+function RichText({ text, onCitation }: { text: string; onCitation?: (number: number) => void }) {
+  const components: Components = {
+    // Links are not followed from inside Vault CRM; only rewritten research
+    // citations become interactive, and they open the matching source below.
+    a: ({ href, children }) => {
+      const number = citationNumber(href);
+      return number && onCitation
+        ? <button type="button" className="citation-chip" onClick={() => onCitation(number)} aria-label={`Show source ${number}`}>{number}</button>
+        : <span>{children}</span>;
+    },
+    table: ({ children }) => <div className="table-wrap markdown-table"><table>{children}</table></div>,
+    img: () => null,
+  };
   return (
     <div className="rich-text">
-      {blocks.map((block, index) => {
-        const lines = block.split("\n").map((line) => line.trim()).filter(Boolean);
-        if (lines.length > 0 && lines.every((line) => line.startsWith("- "))) {
-          return <ul key={index}>{lines.map((line, lineIndex) => <li key={lineIndex}>{renderInlineMarkdown(line.slice(2))}</li>)}</ul>;
-        }
-        return <p key={index}>{lines.map((line, lineIndex) => <span key={lineIndex}>{renderInlineMarkdown(line)}{lineIndex < lines.length - 1 && <br />}</span>)}</p>;
-      })}
+      <Markdown remarkPlugins={[remarkGfm]} components={components} skipHtml>{text}</Markdown>
     </div>
   );
 }
 
-function renderInlineMarkdown(value: string): React.ReactNode[] {
-  return value.split(/(\*\*[^*]+\*\*)/g).filter(Boolean).map((part, index) => (
-    part.startsWith("**") && part.endsWith("**")
-      ? <strong key={index}>{part.slice(2, -2)}</strong>
-      : <span key={index}>{part}</span>
-  ));
+function ResearchEvidence({ messageId, evidence }: { messageId: string; evidence: ResearchEvidenceData }) {
+  const { sources, steps } = evidence;
+  if (!sources.length && !steps.length) return null;
+  return (
+    <div className="research-evidence">
+      {sources.length > 0 && (
+        <section aria-label="Sources">
+          <div className="research-section-label">Sources</div>
+          {sources.map((source) => (
+            <details key={source.attachmentId} id={sourceElementId(messageId, source.number)} className="source-details">
+              <summary>
+                <span className="citation-chip" aria-hidden="true">{source.number}</span>
+                <span className="source-title">{source.title}</span>
+                {source.loading && <Spinner />}
+              </summary>
+              <section className="result-card">
+                {source.error && <div className="result-error">{source.error}</div>}
+                {source.table && <DataTable table={source.table} />}
+              </section>
+              {source.sql && <details className="sql-details"><summary>Show code</summary><pre>{source.sql}</pre></details>}
+            </details>
+          ))}
+        </section>
+      )}
+      {steps.length > 0 && (
+        <details className="research-steps">
+          <summary><TableIcon /> Research steps · {steps.length} {steps.length === 1 ? "query" : "queries"}</summary>
+          {steps.map((step) => (
+            <div key={step.callId} className="research-step">
+              <strong>{step.title}</strong>
+              {step.table && <section className="result-card"><DataTable table={step.table} /></section>}
+              {step.sql && <details className="sql-details"><summary>Show code</summary><pre>{step.sql}</pre></details>}
+            </div>
+          ))}
+        </details>
+      )}
+    </div>
+  );
 }
 
-function ResearchOutput({ value }: { value: string }) {
-  const table = parseMarkdownTable(value);
-  if (table) return <section className="result-card"><div className="result-card-header"><TableIcon /><div><strong>Research result</strong><span>Structured output from Agent mode</span></div></div><DataTable table={table} /></section>;
-  return <div className="research-note"><RichText text={value} /></div>;
+function sourceElementId(messageId: string, number: number): string {
+  return `${messageId}-source-${number}`;
+}
+
+function openSource(messageId: string, number: number): void {
+  const element = document.getElementById(sourceElementId(messageId, number));
+  if (!(element instanceof HTMLDetailsElement)) return;
+  element.open = true;
+  element.scrollIntoView({ behavior: "smooth", block: "nearest" });
 }
 
 async function hydrateChatMessage(
@@ -674,32 +790,57 @@ async function hydrateChatMessage(
   ]);
 }
 
-function renderAgentResponse(response: AgentResponse): { answer: string; outputs: string[]; sql: string[] } {
-  const answers: string[] = [];
-  const outputs: string[] = [];
-  const sql: string[] = [];
-  for (const item of response.output ?? []) {
-    if (item.type === "message" && item.role === "assistant") {
-      for (const content of item.content ?? []) {
-        const text = typeof content.text === "string" ? content.text : undefined;
-        if (text) answers.push(text);
-      }
-    }
-    if (item.type === "function_call_output" && typeof item.output === "string") outputs.push(item.output);
-    if (item.type === "function_call" && typeof item.arguments === "string") {
-      try {
-        const args = JSON.parse(item.arguments) as { sql?: string };
-        if (args.sql) sql.push(args.sql);
-      } catch {
-        // Ignore malformed optional function metadata.
-      }
-    }
+async function loadResearchChart(
+  chart: ResearchChart,
+  conversation: ConversationHandle,
+  assistantId: string,
+  client: BrokerClient,
+  updateMessage: (id: string, update: (message: UiMessage) => UiMessage) => void,
+  visualUrls: Set<string>,
+): Promise<void> {
+  const updateVisual = (update: (visual: VisualCard) => VisualCard) => updateMessage(assistantId, (current) => ({
+    ...current,
+    visuals: current.visuals?.map((item) => item.attachmentId === chart.attachmentId ? update(item) : item),
+  }));
+  updateMessage(assistantId, (current) => ({
+    ...current,
+    visuals: [...(current.visuals ?? []), { attachmentId: chart.attachmentId, title: chart.title, loading: true }],
+  }));
+  try {
+    const blob = await getVisualization(client, conversation, chart.messageId, chart.attachmentId);
+    if (!blob.type.startsWith("image/") || blob.size === 0) throw new Error("invalid_visualization_payload");
+    const url = URL.createObjectURL(blob);
+    visualUrls.add(url);
+    updateVisual((visual) => ({ ...visual, url, loading: false }));
+  } catch (error) {
+    updateVisual((visual) => ({ ...visual, loading: false, error: humanizeApiError(error) }));
   }
-  return {
-    answer: answers.join("\n\n") || "The research run completed. Review the structured results below.",
-    outputs,
-    sql,
-  };
+}
+
+// Shows the table Genie returned to the agent right away (toQueryCard), then
+// replaces it with the full statement result when the query-result endpoint has one.
+async function loadQueryData(
+  query: ResearchQuery,
+  messageId: string,
+  conversation: ConversationHandle,
+  client: BrokerClient,
+  apply: (update: (card: QueryCard) => QueryCard) => void,
+): Promise<void> {
+  try {
+    const table = toTableData(await getQueryResult(client, conversation, messageId, query.callId));
+    apply((card) => ({ ...card, table: table ?? card.table, loading: false }));
+  } catch (error) {
+    // Keep the table Genie returned to the agent; report an error only without one.
+    apply((card) => ({ ...card, loading: false, error: card.table ? undefined : humanizeApiError(error) }));
+  }
+}
+
+function toQueryCard(query: ResearchQuery, loading: boolean): QueryCard {
+  return { attachmentId: query.callId, title: query.title, sql: query.sql, table: parseMarkdownTable(query.output ?? ""), loading };
+}
+
+function toStepCard(step: ResearchQuery): StepCard {
+  return { callId: step.callId, title: step.title, sql: step.sql, table: parseMarkdownTable(step.output ?? "") };
 }
 
 function toTableData(payload: QueryResultResponse): TableData | undefined {
