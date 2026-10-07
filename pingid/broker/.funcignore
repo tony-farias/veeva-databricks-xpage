@@ -1,0 +1,11 @@
+.env
+.env.*
+*.ts
+*.map
+dist/**/*.test.js
+Dockerfile
+local.settings.json
+local.settings.example.json
+README.md
+src/
+tsconfig.json

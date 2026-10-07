@@ -1,0 +1,29 @@
+{
+  "name": "vault-crm-genie-service-principal-broker",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "main": "dist/functions/broker.js",
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "dev": "tsx watch src/server.ts",
+    "build": "tsc -p tsconfig.json",
+    "start": "node dist/server.js",
+    "test": "npm run build && node --test dist/*.test.js dist/functions/*.test.js",
+    "start:functions": "npm run build && func start",
+    "package:functions": "node scripts/package-functions.mjs"
+  },
+  "dependencies": {
+    "@azure/functions": "^4.16.5",
+    "express": "^5.1.0",
+    "express-rate-limit": "^8.1.0"
+  },
+  "devDependencies": {
+    "@types/express": "^5.0.5",
+    "@types/node": "^24.10.1",
+    "tsx": "^4.21.0",
+    "typescript": "~5.9.3"
+  }
+}

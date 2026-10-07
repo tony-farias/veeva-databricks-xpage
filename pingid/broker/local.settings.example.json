@@ -1,0 +1,19 @@
+{
+  "IsEncrypted": false,
+  "Values": {
+    "FUNCTIONS_WORKER_RUNTIME": "node",
+    "AzureWebJobsStorage": "UseDevelopmentStorage=true",
+    "BROKER_FUNCTION_AUTH_LEVEL": "function",
+    "DBX_WORKSPACE_HOST": "<workspace-host>.azuredatabricks.net",
+    "DBX_GENIE_AGENT_ID": "<genie-space-id>",
+    "DBX_SP_CLIENT_ID": "<service-principal-application-id>",
+    "DBX_SP_CLIENT_SECRET": "<service-principal-oauth-secret>",
+    "DBX_SP_DISPLAY_NAME": "veeva-xpage-genie-shared",
+    "DBX_SP_OAUTH_SCOPE": "all-apis",
+    "IDENTITY_CLAIM_NAME": "sub",
+    "STATE_ENCRYPTION_SECRET": "<at least 32 random bytes, e.g. openssl rand -base64 48>",
+    "ALLOWED_PARENT_ORIGINS": "https://your-gateway-origin.example.com",
+    "ALLOW_OPAQUE_PARENT_ORIGIN": "false",
+    "ALLOW_VEEVA_PARENT_ORIGINS": "false"
+  }
+}
