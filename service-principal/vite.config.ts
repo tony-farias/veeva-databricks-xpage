@@ -1,3 +1,4 @@
+/// <reference types="vitest/config" />
 import { defineConfig } from 'vite'
 import react from '@vitejs/plugin-react'
 
@@ -8,6 +9,8 @@ export default defineConfig({
   // keep the build working whether Veeva serves it from a CDN path or locally
   // inside the Vault CRM mobile web view.
   base: './',
+  // Broker tests live in broker/ and run with node:test; vitest covers the X-Page only.
+  test: { include: ['src/**/*.test.ts'] },
   build: {
     // Vault CRM opens downloaded X-Pages from file:// in WKWebView. ES-module
     // scripts are subject to module CORS checks there, so emit one classic

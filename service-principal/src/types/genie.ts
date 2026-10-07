@@ -111,10 +111,19 @@ export interface AgentOutputItem {
   role?: string;
   status?: string;
   name?: string;
+  call_id?: string;
   arguments?: string;
   output?: string;
+  metadata?: AgentItemMetadata;
   content?: Array<Record<string, unknown>>;
   summary?: Array<Record<string, unknown>>;
+  [key: string]: unknown;
+}
+
+export interface AgentItemMetadata {
+  message_id?: string;
+  statement_id?: string;
+  viz?: { attachment_id?: string; query_attachment_id?: string };
   [key: string]: unknown;
 }
 

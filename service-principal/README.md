@@ -87,8 +87,11 @@ From this directory:
 ```bash
 npm ci
 npm run lint
+npm test
 npm run package:xpage
 ```
+
+`npm test` runs the X-Page unit tests, including Research-mode parsing against a captured Agent mode response (`src/lib/__fixtures__/`).
 
 Output:
 
