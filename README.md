@@ -50,12 +50,13 @@ The browser never receives the Databricks access token. The broker returns an en
 
 ## Choose an identity model
 
-This repository now contains two complete X-Page implementations so a customer can choose the authorization model that fits its requirements:
+This repository contains complete implementations so a customer can choose the authorization model and Veeva platform that fit its requirements:
 
 | Implementation | Databricks caller | Best fit |
 | --- | --- | --- |
 | Repository root | Individual Veeva/Okta/Entra user | Preserve each user's Unity Catalog permissions, row filters, column masks, and Databricks audit identity |
 | [`service-principal/`](service-principal/) | Fixed workspace service principal | Give all X-Page users one deliberately curated data boundary without provisioning each user in Databricks |
+| [`veeva-crm/`](veeva-crm/) | Fixed workspace service principal | The same shared-identity design for Veeva CRM (Salesforce) MyInsights instead of Vault CRM X-Pages |
 
 The service-principal implementation is independent: it has its own React application, broker, dependencies, build scripts, documentation, and deployment configuration. Databricks records the shared service principal for those requests, while the broker maintains a compensating audit correlation to the verified Veeva user.
 
@@ -66,6 +67,7 @@ src/                         X-Page React application
 public/xpage-config.js       Non-secret X-Page runtime configuration
 broker/                      Authentication and Databricks API broker
 service-principal/            Independent fixed-service-principal alternative
+veeva-crm/                    Fixed-service-principal variant for Veeva CRM MyInsights
 ops/                         Synthetic-data and demo SQL
 scripts/                     X-Page build and packaging scripts
 PRODUCT.md                   Product and UX context

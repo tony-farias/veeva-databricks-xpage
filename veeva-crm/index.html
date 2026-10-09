@@ -1,0 +1,23 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="color-scheme" content="light" />
+    <title>Research Insights · Databricks Genie</title>
+    <!-- Runs before the application bundle so WKWebView startup failures are
+         visible instead of leaving an unexplained blank MyInsights page. -->
+    <script src="./startup-guard.js"></script>
+  </head>
+  <body>
+    <div id="root"></div>
+    <!-- Veeva's MyInsights library depends on Q and creates window.ds. Both
+         files are copied into the package by scripts/prepare-myinsights-assets.mjs. -->
+    <script src="./vendor/q.js"></script>
+    <script src="./vendor/myinsights.js"></script>
+    <!-- Runtime configuration stays outside the hashed bundle so each Veeva CRM
+         org can use the same build with a different workspace/broker. -->
+    <script src="./myinsights-config.js"></script>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
+</html>
