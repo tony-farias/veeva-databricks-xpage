@@ -28,6 +28,7 @@ import type {
   AgentResponse,
   BrokerSession,
   ConversationHandle,
+  GenieAgent,
   GenieAttachment,
   GenieMessage,
   QueryResultResponse,
@@ -92,11 +93,9 @@ interface UiMessage {
   suggestions?: string[];
 }
 
-const suggestions = [
-  "Show the patient count and median observed survival by ECOG performance status.",
-  "What is the median observed overall survival for deceased Stage IV patients, broken down by primary driver?",
-  "What is the average total cost of care by primary driver among advanced-stage patients?",
-];
+// Only the last-opened Agent ID is kept on the device; it is not sensitive and
+// is honored only while the broker still lists that Agent.
+const lastAgentKey = "genie-xpage:last-agent";
 
 const terminalStatuses = new Set(["COMPLETED", "FAILED", "CANCELLED", "QUERY_RESULT_EXPIRED"]);
 
@@ -106,6 +105,9 @@ export function GenieXPage() {
   const [phase, setPhase] = useState<ConnectionPhase>(problems.length ? "configuration" : "connecting");
   const [connectionError, setConnectionError] = useState("");
   const [session, setSession] = useState<BrokerSession>();
+  const [agentId, setAgentId] = useState<string>();
+  const [lastAgentId, setLastAgentId] = useState(() => readLastAgent());
+  const [agentNotice, setAgentNotice] = useState("");
   const [mode, setMode] = useState<GenieExperienceMode>(config.defaultMode);
   const [messages, setMessages] = useState<UiMessage[]>([]);
   const [draft, setDraft] = useState("");
@@ -116,6 +118,7 @@ export function GenieXPage() {
   const abortRef = useRef<AbortController | undefined>(undefined);
   const visualUrlsRef = useRef(new Set<string>());
   const sessionRef = useRef<BrokerSession | undefined>(undefined);
+  const agentIdRef = useRef<string | undefined>(undefined);
   const connectionInFlightRef = useRef(false);
 
   useEffect(() => {
@@ -131,6 +134,26 @@ export function GenieXPage() {
     setMessages((current) => current.map((message) => message.id === id ? update(message) : message));
   }, []);
 
+  const resetConversation = useCallback(() => {
+    abortRef.current?.abort();
+    abortRef.current = undefined;
+    for (const url of visualUrlsRef.current) URL.revokeObjectURL(url);
+    visualUrlsRef.current.clear();
+    setMessages([]);
+    setChatConversation(undefined);
+    setResearchConversation(undefined);
+    setBusy(false);
+  }, []);
+
+  const selectAgent = useCallback((id: string | undefined) => {
+    agentIdRef.current = id;
+    setAgentId(id);
+    if (id) {
+      rememberLastAgent(id);
+      setLastAgentId(id);
+    }
+  }, []);
+
   const connect = useCallback(async (background = false) => {
     if (connectionInFlightRef.current) return;
     connectionInFlightRef.current = true;
@@ -142,6 +165,17 @@ export function GenieXPage() {
     try {
       vaultSession = await getVaultSession();
       const nextSession = await createBrokerSession(config.authBrokerBaseUrl, vaultSession);
+      // Each new session carries the user's current Agents. An open Agent that
+      // is no longer listed is closed; a single Agent opens without a choice.
+      const openAgentId = agentIdRef.current;
+      if (!openAgentId || !nextSession.agents.some((agent) => agent.id === openAgentId)) {
+        if (openAgentId) {
+          const closed = sessionRef.current?.agents.find((agent) => agent.id === openAgentId);
+          resetConversation();
+          setAgentNotice(`Your access to ${closed?.title ?? "that Genie agent"} changed, so it was closed.`);
+        }
+        selectAgent(nextSession.agents.length === 1 ? nextSession.agents[0]?.id : undefined);
+      }
       sessionRef.current = nextSession;
       setSession(nextSession);
       setConnectionError("");
@@ -158,7 +192,7 @@ export function GenieXPage() {
       if (vaultSession) vaultSession.sessionId = "";
       connectionInFlightRef.current = false;
     }
-  }, [config.authBrokerBaseUrl]);
+  }, [config.authBrokerBaseUrl, resetConversation, selectAgent]);
 
   useEffect(() => {
     if (problems.length > 0) return;
@@ -176,17 +210,6 @@ export function GenieXPage() {
     return () => window.clearInterval(timer);
   }, [connect]);
 
-  const resetConversation = useCallback(() => {
-    abortRef.current?.abort();
-    abortRef.current = undefined;
-    for (const url of visualUrlsRef.current) URL.revokeObjectURL(url);
-    visualUrlsRef.current.clear();
-    setMessages([]);
-    setChatConversation(undefined);
-    setResearchConversation(undefined);
-    setBusy(false);
-  }, []);
-
   const handleApiError = useCallback((assistantId: string, error: unknown) => {
     if (error instanceof DOMException && error.name === "AbortError") return;
     const description = humanizeApiError(error);
@@ -196,7 +219,7 @@ export function GenieXPage() {
       state: "error",
       status: undefined,
     }));
-    if (error instanceof BrokerApiError && error.code === "conversation_not_owned") {
+    if (error instanceof BrokerApiError && ["conversation_not_owned", "agent_not_entitled"].includes(error.code)) {
       setChatConversation(undefined);
       setResearchConversation(undefined);
     }
@@ -213,19 +236,20 @@ export function GenieXPage() {
     content: string,
     assistantId: string,
     activeSession: BrokerSession,
+    activeAgentId: string,
   ) => {
     let conversation = chatConversation;
     let messageId: string | undefined;
 
     if (!conversation) {
-      const started = await startChat(config.authBrokerBaseUrl, activeSession.sessionToken, content);
+      const started = await startChat(config.authBrokerBaseUrl, activeSession.sessionToken, activeAgentId, content);
       const conversationId = started.conversation_id
         ?? started.conversation?.conversation_id
         ?? started.conversation?.id
         ?? started.message?.conversation_id;
       messageId = started.message_id ?? started.message?.message_id ?? started.message?.id;
       if (conversationId && started.conversation_ticket) {
-        conversation = { id: conversationId, ticket: started.conversation_ticket };
+        conversation = { agentId: activeAgentId, id: conversationId, ticket: started.conversation_ticket };
         setChatConversation(conversation);
       }
     } else {
@@ -271,6 +295,7 @@ export function GenieXPage() {
     content: string,
     assistantId: string,
     activeSession: BrokerSession,
+    activeAgentId: string,
   ) => {
     const controller = new AbortController();
     abortRef.current = controller;
@@ -291,13 +316,14 @@ export function GenieXPage() {
     await streamResearch(
       config.authBrokerBaseUrl,
       activeSession.sessionToken,
+      activeAgentId,
       content,
       researchConversation,
       (event) => {
         const type = event.type ?? "";
         if (type === "broker.conversation") {
           if (event.conversation_id && event.conversation_ticket) {
-            conversation = { id: event.conversation_id, ticket: event.conversation_ticket };
+            conversation = { agentId: activeAgentId, id: event.conversation_id, ticket: event.conversation_ticket };
             setResearchConversation(conversation);
           }
           return;
@@ -363,7 +389,7 @@ export function GenieXPage() {
 
   const send = useCallback(async (override?: string) => {
     const content = (override ?? draft).trim();
-    if (!content || !session || busy) return;
+    if (!content || !session || !agentId || busy) return;
     const activeMode = mode;
     const userId = createId("user");
     const assistantId = createId("assistant");
@@ -382,23 +408,37 @@ export function GenieXPage() {
       },
     ]);
     try {
-      if (activeMode === "research") await runResearch(content, assistantId, session);
-      else await runChat(content, assistantId, session);
+      if (activeMode === "research") await runResearch(content, assistantId, session, agentId);
+      else await runChat(content, assistantId, session, agentId);
     } catch (error) {
       handleApiError(assistantId, error);
     } finally {
       setBusy(false);
       abortRef.current = undefined;
     }
-  }, [busy, draft, handleApiError, mode, runChat, runResearch, session]);
+  }, [agentId, busy, draft, handleApiError, mode, runChat, runResearch, session]);
 
   const changeMode = (nextMode: GenieExperienceMode) => {
     if (busy || nextMode === mode) return;
     setMode(nextMode);
   };
 
+  const openAgent = (id: string) => {
+    resetConversation();
+    setAgentNotice("");
+    selectAgent(id);
+  };
+
+  const switchAgent = () => {
+    if (busy) return;
+    resetConversation();
+    setAgentNotice("");
+    selectAgent(undefined);
+  };
+
   const status = connectionStatus(phase, busy, mode);
-  const connected = phase === "ready" && Boolean(session);
+  const readySession = phase === "ready" ? session : undefined;
+  const agent = readySession?.agents.find((candidate) => candidate.id === agentId);
 
   return (
     <main className="xpage">
@@ -407,7 +447,7 @@ export function GenieXPage() {
           <span className="spark" aria-hidden="true"><SparkIcon /></span>
           <span className="space-heading">
             <small>Genie</small>
-            <strong>{config.displayName}</strong>
+            <strong>{agent?.title ?? "Genie agents"}</strong>
           </span>
         </div>
         <span className="host-badge">Veeva Vault CRM</span>
@@ -423,21 +463,26 @@ export function GenieXPage() {
           <span className={`status-dot ${status.tone}`} />
           {status.label}
         </div>
-        {connected && (
+        {agent && (
           <div className="context-actions">
-            <a className="quiet-button desktop-only" href={genieWorkspaceUrl(config)} target="_blank" rel="noreferrer">Open in Databricks</a>
+            {(readySession?.agents.length ?? 0) > 1 && (
+              <button className="quiet-button switch-agent-button" type="button" onClick={switchAgent} disabled={busy}><SwitchIcon /> Switch agent</button>
+            )}
+            <a className="quiet-button desktop-only" href={genieWorkspaceUrl(config, agent.id)} target="_blank" rel="noreferrer">Open in Databricks</a>
             <button className="quiet-button new-chat-button" type="button" onClick={resetConversation} disabled={busy}><PlusIcon /> New chat</button>
           </div>
         )}
       </header>
 
-      {!connected ? (
+      {!readySession ? (
         <ConnectionGate
           phase={phase}
           error={connectionError}
           problems={problems}
           onConnect={() => void connect()}
         />
+      ) : !agent ? (
+        <AgentPicker agents={readySession.agents} lastAgentId={lastAgentId} notice={agentNotice} onOpen={openAgent} />
       ) : (
         <section className="chat-workspace">
           <div className="mode-bar" role="tablist" aria-label="Genie experience">
@@ -450,7 +495,7 @@ export function GenieXPage() {
 
           <div className="transcript" aria-live="polite">
             {messages.length === 0 ? (
-              <Welcome mode={mode} onSuggestion={(text) => void send(text)} />
+              <Welcome mode={mode} agent={agent} />
             ) : (
               <div className="message-list">
                 {messages.map((message) => <MessageCard key={message.id} message={message} onSuggestion={(text) => void send(text)} />)}
@@ -470,7 +515,7 @@ export function GenieXPage() {
                     void send();
                   }
                 }}
-                placeholder={mode === "research" ? "Ask for a deeper analysis of the synthetic NSCLC cohort…" : "Ask a question about the synthetic NSCLC cohort…"}
+                placeholder={mode === "research" ? "Ask for a deeper analysis…" : "Ask a question…"}
                 rows={1}
                 maxLength={10_000}
                 disabled={busy}
@@ -554,21 +599,55 @@ function ModeButton({
   );
 }
 
-function Welcome({ mode, onSuggestion }: { mode: GenieExperienceMode; onSuggestion: (text: string) => void }) {
+function AgentPicker({
+  agents,
+  lastAgentId,
+  notice,
+  onOpen,
+}: {
+  agents: GenieAgent[];
+  lastAgentId: string | undefined;
+  notice: string;
+  onOpen: (agentId: string) => void;
+}) {
+  return (
+    <section className="connection-workspace">
+      <div className="agent-picker">
+        <p className="eyebrow">Genie agents for your Veeva role</p>
+        <h1>{agents.length ? "Choose a Genie agent" : "No Genie agents are assigned to you"}</h1>
+        <p className="connection-copy">
+          {agents.length
+            ? "Your Veeva role decides which agents appear here. Inside every agent, rows stay limited to your Veeva identity."
+            : "None of your Veeva roles grants a Genie agent yet. Ask your Vault CRM administrator to assign the role that includes one."}
+        </p>
+        {notice && <div className="notice-banner" role="status">{notice}</div>}
+        {agents.length > 0 && (
+          <div className="agent-grid">
+            {agents.map((agent) => (
+              <button key={agent.id} type="button" className="agent-card" onClick={() => onOpen(agent.id)}>
+                <span className="agent-card-mark"><SparkIcon /></span>
+                <strong>{agent.title}</strong>
+                {agent.description && <p>{agent.description}</p>}
+                <span className="agent-card-footer">
+                  {agent.id === lastAgentId && <em>Last used</em>}
+                  <span>Open</span>
+                </span>
+              </button>
+            ))}
+          </div>
+        )}
+      </div>
+    </section>
+  );
+}
+
+function Welcome({ mode, agent }: { mode: GenieExperienceMode; agent: GenieAgent }) {
   return (
     <div className="welcome">
       <div className="welcome-mark"><SparkIcon /></div>
-      <p className="eyebrow">{mode === "research" ? "Genie Research" : "Synthetic NSCLC real-world evidence"}</p>
-      <h1>{mode === "research" ? "What should we investigate?" : "Ask about the NSCLC cohort"}</h1>
-      <p>{mode === "research" ? "Research mode plans a multi-step analysis and streams a cited report." : "Explore survival, treatment, biomarkers, demographics, and cost of care in 49,915 fictional Stage IV patients."}</p>
-      <div className="suggestion-grid">
-        {suggestions.map((text, index) => (
-          <button key={text} type="button" onClick={() => onSuggestion(text)}>
-            <span>{index === 0 ? <ChartIcon /> : index === 1 ? <TrendIcon /> : <TableIcon />}</span>
-            {text}
-          </button>
-        ))}
-      </div>
+      <p className="eyebrow">{mode === "research" ? "Genie Research" : "Genie Chat"}</p>
+      <h1>{agent.title}</h1>
+      <p>{mode === "research" ? "Research mode plans a multi-step analysis and streams a cited report." : agent.description ?? "Ask a question in plain language."}</p>
     </div>
   );
 }
@@ -952,6 +1031,22 @@ function connectionStatus(phase: ConnectionPhase, busy: boolean, mode: GenieExpe
   return { label: phase === "configuration" ? "Setup needed" : "Not connected", tone: "attention" };
 }
 
+function readLastAgent(): string | undefined {
+  try {
+    return window.localStorage.getItem(lastAgentKey) ?? undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function rememberLastAgent(agentId: string): void {
+  try {
+    window.localStorage.setItem(lastAgentKey, agentId);
+  } catch {
+    // Storage can be unavailable inside the Vault CRM web view; nothing depends on it.
+  }
+}
+
 function humanizeConnectionError(error: unknown): string {
   const message = error instanceof Error ? error.message : String(error);
   const labels: Record<string, string> = {
@@ -966,6 +1061,8 @@ function humanizeConnectionError(error: unknown): string {
     identity_claim_rejected: "Databricks did not confirm the data scope for your session, so the broker stopped before running any query.",
     origin_not_allowed: "This X‑Page origin is not allowlisted by the secure broker.",
     missing_vault_session: "Vault CRM did not provide an active session to the secure broker.",
+    agent_directory_unavailable: "The broker could not read which Genie agents your Veeva role includes. Please try again.",
+    agent_lookup_failed: "The broker could not load your Genie agents. Please try again.",
   };
   return labels[error instanceof BrokerApiError ? error.code : message] ?? "The secure connection could not be completed. Please try again.";
 }
@@ -980,6 +1077,7 @@ function humanizeApiError(error: unknown): string {
       RATE_LIMIT_EXCEEDED: "Genie is receiving too many requests. Wait a moment and try again.",
       conversation_not_owned: "This conversation belongs to a different secure session. Your next question starts a new chat.",
       data_scope_unavailable: "Databricks could not confirm which rows you are entitled to, so no data was returned.",
+      agent_not_entitled: "Your Veeva role no longer includes this Genie agent. Reopen the X‑Page to see your current agents.",
     };
     return labels[error.code] ?? error.message ?? "Databricks could not complete this request.";
   }
@@ -1005,7 +1103,6 @@ function ChatIcon() { return <svg viewBox="0 0 24 24" fill="none" aria-hidden="t
 function ResearchIcon() { return <svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><circle cx="10.5" cy="10.5" r="5.5" stroke="currentColor" strokeWidth="1.8"/><path d="m15 15 4.5 4.5M8 10.5h5M10.5 8v5" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round"/></svg>; }
 function SendIcon() { return <svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="m4 4 17 8-17 8 3-8-3-8Z" stroke="currentColor" strokeWidth="1.8" strokeLinejoin="round"/><path d="M7 12h14" stroke="currentColor" strokeWidth="1.8"/></svg>; }
 function TableIcon() { return <svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><rect x="3" y="5" width="18" height="14" rx="2" stroke="currentColor" strokeWidth="1.7"/><path d="M3 10h18M9 5v14" stroke="currentColor" strokeWidth="1.5"/></svg>; }
-function ChartIcon() { return <svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M4 19V5M4 19h16" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round"/><path d="m7 15 3-4 3 2 5-6" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/></svg>; }
+function SwitchIcon() { return <svg viewBox="0 0 20 20" fill="none" aria-hidden="true"><path d="M4 7h11m0 0-3-3m3 3-3 3M16 13H5m0 0 3-3m-3 3 3 3" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round"/></svg>; }
 function PlusIcon() { return <svg viewBox="0 0 20 20" fill="none" aria-hidden="true"><path d="M10 4v12M4 10h12" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round"/></svg>; }
-function TrendIcon() { return <svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M4 18V6M4 18h16M7 14l4-4 3 2 5-6" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"/></svg>; }
 function Spinner() { return <span className="spinner" aria-hidden="true" />; }

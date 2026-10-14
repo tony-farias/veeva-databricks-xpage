@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import express, { type NextFunction, type Request, type Response } from "express";
 import { rateLimit } from "express-rate-limit";
+import { resolveAgents } from "./agents.js";
 import { openApiSession, sealApiSession, type ApiSession } from "./apiSession.js";
 import { loadConfig, type BrokerConfig } from "./config.js";
 import {
@@ -43,30 +44,31 @@ const genieLimiter = rateLimit({ windowMs: 60_000, limit: 180, standardHeaders: 
 
 app.post("/api/session", sessionLimiter, (req, res) => createApiSession(req, res, config));
 app.get("/api/me", genieLimiter, (req, res) => getApiIdentity(req, res, config));
-app.post("/api/genie/chat/start", genieLimiter, (req, res) => startChat(req, res, config));
+// Every Genie route names its Agent, which must be one the session may open.
+app.post("/api/agents/:agentId/chat/start", genieLimiter, (req, res) => startChat(req, res, config));
 app.post(
-  "/api/genie/chat/conversations/:conversationId/messages",
+  "/api/agents/:agentId/chat/conversations/:conversationId/messages",
   genieLimiter,
   (req, res) => continueChat(req, res, config),
 );
 app.get(
-  "/api/genie/chat/conversations/:conversationId/messages/:messageId",
+  "/api/agents/:agentId/chat/conversations/:conversationId/messages/:messageId",
   genieLimiter,
   (req, res) => getChatMessage(req, res, config),
 );
 app.get(
-  "/api/genie/chat/conversations/:conversationId/messages/:messageId/attachments/:attachmentId/query-result",
+  "/api/agents/:agentId/chat/conversations/:conversationId/messages/:messageId/attachments/:attachmentId/query-result",
   genieLimiter,
   (req, res) => getQueryResult(req, res, config),
 );
 app.get(
-  "/api/genie/chat/conversations/:conversationId/messages/:messageId/attachments/:attachmentId/visualization",
+  "/api/agents/:agentId/chat/conversations/:conversationId/messages/:messageId/attachments/:attachmentId/visualization",
   genieLimiter,
   (req, res) => getVisualization(req, res, config),
 );
-app.post("/api/genie/agent/responses", genieLimiter, (req, res) => streamAgentResponse(req, res, config));
+app.post("/api/agents/:agentId/research/responses", genieLimiter, (req, res) => streamAgentResponse(req, res, config));
 app.get(
-  "/api/genie/agent/conversations/:conversationId/items",
+  "/api/agents/:agentId/research/conversations/:conversationId/items",
   genieLimiter,
   (req, res) => listAgentItems(req, res, config),
 );
@@ -75,7 +77,9 @@ app.listen(config.port, () => {
   console.log(JSON.stringify({
     event: "broker.started",
     authorizationMode: "service_principal",
-    genieAgentId: config.genieAgentId,
+    ...(config.agentSource.kind === "fixed"
+      ? { genieAgentId: config.agentSource.agentId }
+      : { agentDirectoryView: config.agentSource.view }),
     servicePrincipal: config.servicePrincipalClientId,
     identityClaimSource: config.identityClaimSource,
     port: config.port,
@@ -126,6 +130,7 @@ async function createApiSession(req: Request, res: Response, current: BrokerConf
     const execution = await getServicePrincipalIdentity(current, actor.identityClaim);
     const expiresAt = Math.min(execution.expiresAt, Date.now() + current.brokerSessionTtlMs);
     if (expiresAt <= Date.now() + 30_000) throw new ApiError("external_token_expired", 401);
+    const agents = await resolveAgents(current, execution.accessToken);
     const session: ApiSession = {
       accessToken: execution.accessToken,
       actorUserName: actor.userName,
@@ -134,10 +139,11 @@ async function createApiSession(req: Request, res: Response, current: BrokerConf
       identityClaimSource: actor.identityClaimSource,
       executionApplicationId: execution.applicationId,
       executionDisplayName: execution.displayName,
+      agentIds: agents.map((agent) => agent.id),
       sessionId: randomUUID(),
       expiresAt,
     };
-    audit("session.created", session, current, requestId(req), {});
+    audit("session.created", session, null, requestId(req), { agentCount: String(agents.length) });
     res.json({
       sessionToken: sealApiSession(session, current.stateSecret),
       expiresAt: new Date(expiresAt).toISOString(),
@@ -148,6 +154,7 @@ async function createApiSession(req: Request, res: Response, current: BrokerConf
         displayName: execution.displayName,
       },
       dataScope: dataScope(session),
+      agents,
     });
   } catch (error) {
     console.warn(JSON.stringify({
@@ -173,6 +180,7 @@ function getApiIdentity(req: Request, res: Response, current: BrokerConfig): voi
       },
       authorizationMode: "service_principal",
       dataScope: dataScope(session),
+      agentIds: session.agentIds,
       expiresAt: new Date(session.expiresAt).toISOString(),
     });
   } catch (error) {
@@ -183,13 +191,14 @@ function getApiIdentity(req: Request, res: Response, current: BrokerConfig): voi
 async function startChat(req: Request, res: Response, current: BrokerConfig): Promise<void> {
   try {
     const session = requireApiSession(req, current);
+    const agentId = requireAgent(req, session);
     const content = parsePrompt(req.body?.content);
-    audit("chat.start", session, current, requestId(req), {});
+    audit("chat.start", session, agentId, requestId(req), {});
     await proxyJson(
       res,
       session,
       current,
-      `/api/2.0/genie/spaces/${current.genieAgentId}/start-conversation`,
+      `/api/2.0/genie/spaces/${agentId}/start-conversation`,
       {
         method: "POST",
         body: JSON.stringify({ content, enable_visualization: req.body?.enableVisualization !== false }),
@@ -197,7 +206,7 @@ async function startChat(req: Request, res: Response, current: BrokerConfig): Pr
       (payload) => {
         const conversationId = startedConversationId(payload);
         if (!conversationId) throw new ApiError("genie_missing_conversation", 502);
-        return { ...payload, conversation_ticket: issueConversationTicket(conversationId, ticketScope(session, current)) };
+        return { ...payload, conversation_ticket: issueConversationTicket(conversationId, ticketScope(session, agentId, current)) };
       },
     );
   } catch (error) {
@@ -208,14 +217,15 @@ async function startChat(req: Request, res: Response, current: BrokerConfig): Pr
 async function continueChat(req: Request, res: Response, current: BrokerConfig): Promise<void> {
   try {
     const session = requireApiSession(req, current);
-    const conversationId = requireConversation(req, req.params.conversationId, session, current);
+    const agentId = requireAgent(req, session);
+    const conversationId = requireConversation(req, req.params.conversationId, session, agentId, current);
     const content = parsePrompt(req.body?.content);
-    audit("chat.continue", session, current, requestId(req), { conversationId });
+    audit("chat.continue", session, agentId, requestId(req), { conversationId });
     await proxyJson(
       res,
       session,
       current,
-      `/api/2.0/genie/spaces/${current.genieAgentId}/conversations/${conversationId}/messages`,
+      `/api/2.0/genie/spaces/${agentId}/conversations/${conversationId}/messages`,
       {
         method: "POST",
         body: JSON.stringify({ content, enable_visualization: req.body?.enableVisualization !== false }),
@@ -229,22 +239,23 @@ async function continueChat(req: Request, res: Response, current: BrokerConfig):
 async function getChatMessage(req: Request, res: Response, current: BrokerConfig): Promise<void> {
   try {
     const session = requireApiSession(req, current);
-    const conversationId = requireConversation(req, req.params.conversationId, session, current);
+    const agentId = requireAgent(req, session);
+    const conversationId = requireConversation(req, req.params.conversationId, session, agentId, current);
     const messageId = parseIdentifier(req.params.messageId, "message_id");
     const correlationId = requestId(req);
-    audit("chat.message.read", session, current, correlationId, { conversationId, messageId });
+    audit("chat.message.read", session, agentId, correlationId, { conversationId, messageId });
     await proxyJson(
       res,
       session,
       current,
-      `/api/2.0/genie/spaces/${current.genieAgentId}/conversations/${conversationId}/messages/${messageId}`,
+      `/api/2.0/genie/spaces/${agentId}/conversations/${conversationId}/messages/${messageId}`,
       {},
       (payload) => {
         // Query history names only the service principal. Logging the statement
         // IDs once per finished message lets audits join them to the Veeva user.
         const statementIds = completedStatementIds(payload);
         if (statementIds.length) {
-          audit("chat.statements", session, current, correlationId, {
+          audit("chat.statements", session, agentId, correlationId, {
             conversationId,
             messageId,
             statementIds: statementIds.join(","),
@@ -261,13 +272,14 @@ async function getChatMessage(req: Request, res: Response, current: BrokerConfig
 async function getQueryResult(req: Request, res: Response, current: BrokerConfig): Promise<void> {
   try {
     const session = requireApiSession(req, current);
-    const ids = parseMessageAttachmentIds(req, session, current);
-    audit("chat.query_result.read", session, current, requestId(req), ids);
+    const agentId = requireAgent(req, session);
+    const ids = parseMessageAttachmentIds(req, session, agentId, current);
+    audit("chat.query_result.read", session, agentId, requestId(req), ids);
     await proxyJson(
       res,
       session,
       current,
-      `/api/2.0/genie/spaces/${current.genieAgentId}/conversations/${ids.conversationId}/messages/${ids.messageId}/attachments/${ids.attachmentId}/query-result`,
+      `/api/2.0/genie/spaces/${agentId}/conversations/${ids.conversationId}/messages/${ids.messageId}/attachments/${ids.attachmentId}/query-result`,
     );
   } catch (error) {
     sendApiError(res, error);
@@ -277,9 +289,10 @@ async function getQueryResult(req: Request, res: Response, current: BrokerConfig
 async function getVisualization(req: Request, res: Response, current: BrokerConfig): Promise<void> {
   try {
     const session = requireApiSession(req, current);
-    const ids = parseMessageAttachmentIds(req, session, current);
-    audit("chat.visualization.read", session, current, requestId(req), ids);
-    const name = `spaces/${current.genieAgentId}/conversations/${ids.conversationId}/messages/${ids.messageId}/attachments/${ids.attachmentId}`;
+    const agentId = requireAgent(req, session);
+    const ids = parseMessageAttachmentIds(req, session, agentId, current);
+    audit("chat.visualization.read", session, agentId, requestId(req), ids);
+    const name = `spaces/${agentId}/conversations/${ids.conversationId}/messages/${ids.messageId}/attachments/${ids.attachmentId}`;
     const upstream = await databricksFetch(
       workspaceUrl(current, `/api/2.0/genie/${name}/download-visualization`),
       session.accessToken,
@@ -302,15 +315,16 @@ async function getVisualization(req: Request, res: Response, current: BrokerConf
 async function listAgentItems(req: Request, res: Response, current: BrokerConfig): Promise<void> {
   try {
     const session = requireApiSession(req, current);
-    const conversationId = requireConversation(req, req.params.conversationId, session, current);
+    const agentId = requireAgent(req, session);
+    const conversationId = requireConversation(req, req.params.conversationId, session, agentId, current);
     const query = new URLSearchParams({ limit: "100", order: "asc" });
     if (typeof req.query.after === "string" && req.query.after) query.set("after", parseIdentifier(req.query.after, "after"));
-    audit("agent.items.read", session, current, requestId(req), { conversationId });
+    audit("agent.items.read", session, agentId, requestId(req), { conversationId });
     await proxyJson(
       res,
       session,
       current,
-      `/api/2.0/genie/agents/${current.genieAgentId}/conversations/${conversationId}/items?${query}`,
+      `/api/2.0/genie/agents/${agentId}/conversations/${conversationId}/items?${query}`,
     );
   } catch (error) {
     sendApiError(res, error);
@@ -320,17 +334,18 @@ async function listAgentItems(req: Request, res: Response, current: BrokerConfig
 async function streamAgentResponse(req: Request, res: Response, current: BrokerConfig): Promise<void> {
   try {
     const session = requireApiSession(req, current);
+    const agentId = requireAgent(req, session);
     const content = parsePrompt(req.body?.content);
     const conversationId = req.body?.conversationId == null
       ? undefined
-      : requireConversation(req, req.body.conversationId, session, current);
-    audit("agent.response.create", session, current, requestId(req), { ...(conversationId ? { conversationId } : {}) });
+      : requireConversation(req, req.body.conversationId, session, agentId, current);
+    audit("agent.response.create", session, agentId, requestId(req), { ...(conversationId ? { conversationId } : {}) });
     const controller = new AbortController();
     res.on("close", () => {
       if (!res.writableEnded) controller.abort();
     });
     const upstream = await databricksFetch(
-      workspaceUrl(current, `/api/2.0/genie/agents/${current.genieAgentId}/responses`),
+      workspaceUrl(current, `/api/2.0/genie/agents/${agentId}/responses`),
       session.accessToken,
       {
         method: "POST",
@@ -365,7 +380,7 @@ async function streamAgentResponse(req: Request, res: Response, current: BrokerC
       }
     } else {
       const decoder = new TextDecoder();
-      const injector = conversationTicketInjector((id) => issueConversationTicket(id, ticketScope(session, current)));
+      const injector = conversationTicketInjector((id) => issueConversationTicket(id, ticketScope(session, agentId, current)));
       while (true) {
         const { done, value } = await reader.read();
         if (done) break;
@@ -439,31 +454,50 @@ function parseIdentifier(value: unknown, name: string): string {
   return encodeURIComponent(value);
 }
 
-function parseMessageAttachmentIds(req: Request, session: ApiSession, current: BrokerConfig): {
+function parseMessageAttachmentIds(req: Request, session: ApiSession, agentId: string, current: BrokerConfig): {
   conversationId: string;
   messageId: string;
   attachmentId: string;
 } {
   return {
-    conversationId: requireConversation(req, req.params.conversationId, session, current),
+    conversationId: requireConversation(req, req.params.conversationId, session, agentId, current),
     messageId: parseIdentifier(req.params.messageId, "message_id"),
     attachmentId: parseIdentifier(req.params.attachmentId, "attachment_id"),
   };
+}
+
+// The X-Page lists only the Agents in the session, but the broker is what
+// enforces it: a request for any other Agent is refused.
+function requireAgent(req: Request, session: ApiSession): string {
+  const agentId = parseIdentifier(req.params.agentId, "agent_id");
+  if (!session.agentIds.includes(agentId)) {
+    console.warn(JSON.stringify({
+      event: "security.agent_rejected",
+      timestamp: new Date().toISOString(),
+      sessionId: session.sessionId,
+      veevaUser: session.actorUserName,
+      genieAgentId: agentId,
+    }));
+    throw new ApiError("agent_not_entitled", 403);
+  }
+  return agentId;
 }
 
 function requireConversation(
   req: Request,
   value: unknown,
   session: ApiSession,
+  agentId: string,
   current: BrokerConfig,
 ): string {
   const conversationId = parseIdentifier(value, "conversation_id");
-  if (!hasConversationTicket(req.header("X-Conversation-Ticket"), conversationId, ticketScope(session, current))) {
+  if (!hasConversationTicket(req.header("X-Conversation-Ticket"), conversationId, ticketScope(session, agentId, current))) {
     console.warn(JSON.stringify({
       event: "security.conversation_rejected",
       timestamp: new Date().toISOString(),
       sessionId: session.sessionId,
       veevaUser: session.actorUserName,
+      genieAgentId: agentId,
       conversationId,
     }));
     throw new ApiError("conversation_not_owned", 403);
@@ -471,8 +505,9 @@ function requireConversation(
   return conversationId;
 }
 
-function ticketScope(session: ApiSession, current: BrokerConfig): TicketScope {
-  return { genieAgentId: current.genieAgentId, identityClaim: session.identityClaim, secret: current.stateSecret };
+// Tickets name the Agent, so a conversation cannot be replayed on another one.
+function ticketScope(session: ApiSession, agentId: string, current: BrokerConfig): TicketScope {
+  return { genieAgentId: agentId, identityClaim: session.identityClaim, secret: current.stateSecret };
 }
 
 function dataScope(session: ApiSession): { mode: "identity_claim"; source: string; identityClaim: string } {
@@ -503,7 +538,7 @@ function requestId(req: Request): string {
 function audit(
   action: string,
   session: ApiSession,
-  current: BrokerConfig,
+  agentId: string | null,
   correlationId: string,
   resource: Record<string, string>,
 ): void {
@@ -516,7 +551,7 @@ function audit(
     veevaUser: session.actorUserName,
     identityClaim: session.identityClaim,
     databricksPrincipal: session.executionApplicationId,
-    genieAgentId: current.genieAgentId,
+    genieAgentId: agentId,
     resource,
   }));
 }

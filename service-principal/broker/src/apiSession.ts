@@ -9,11 +9,13 @@ export interface ApiSession {
   identityClaimSource: IdentityClaimSource;
   executionApplicationId: string;
   executionDisplayName: string;
+  /** Genie Agents this user may open, read from the directory at sign-in. */
+  agentIds: string[];
   sessionId: string;
   expiresAt: number;
 }
 
-const VERSION = "sp2";
+const VERSION = "sp3";
 
 export function sealApiSession(session: ApiSession, secret: string): string {
   const iv = randomBytes(12);
@@ -44,6 +46,8 @@ export function openApiSession(value: string, secret: string, now = Date.now()):
       (parsed.identityClaimSource !== "user_name" && parsed.identityClaimSource !== "federated_id") ||
       typeof parsed.executionApplicationId !== "string" ||
       typeof parsed.executionDisplayName !== "string" ||
+      !Array.isArray(parsed.agentIds) ||
+      !parsed.agentIds.every((id) => typeof id === "string" && /^[a-z0-9_-]{8,128}$/i.test(id)) ||
       typeof parsed.sessionId !== "string" ||
       typeof parsed.expiresAt !== "number" ||
       parsed.expiresAt <= now

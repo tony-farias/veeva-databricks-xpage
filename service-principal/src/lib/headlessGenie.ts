@@ -35,9 +35,10 @@ export async function createBrokerSession(
 export async function startChat(
   brokerBaseUrl: string,
   sessionToken: string,
+  agentId: string,
   content: string,
 ): Promise<StartConversationResponse> {
-  return request(brokerBaseUrl, "/api/genie/chat/start", sessionToken, {
+  return request(brokerBaseUrl, `${agentPath(agentId)}/chat/start`, sessionToken, {
     method: "POST",
     body: JSON.stringify({ content, enableVisualization: true }),
   });
@@ -51,7 +52,7 @@ export async function continueChat(
 ): Promise<GenieMessage> {
   return request(
     brokerBaseUrl,
-    `/api/genie/chat/conversations/${encodeURIComponent(conversation.id)}/messages`,
+    `${conversationPath(conversation)}/messages`,
     sessionToken,
     {
       method: "POST",
@@ -69,7 +70,7 @@ export async function getChatMessage(
 ): Promise<GenieMessage> {
   return request(
     brokerBaseUrl,
-    `/api/genie/chat/conversations/${encodeURIComponent(conversation.id)}/messages/${encodeURIComponent(messageId)}`,
+    `${conversationPath(conversation)}/messages/${encodeURIComponent(messageId)}`,
     sessionToken,
     { headers: ticketHeader(conversation) },
   );
@@ -84,7 +85,7 @@ export async function getQueryResult(
 ): Promise<QueryResultResponse> {
   return request(
     brokerBaseUrl,
-    `/api/genie/chat/conversations/${encodeURIComponent(conversation.id)}/messages/${encodeURIComponent(messageId)}/attachments/${encodeURIComponent(attachmentId)}/query-result`,
+    `${conversationPath(conversation)}/messages/${encodeURIComponent(messageId)}/attachments/${encodeURIComponent(attachmentId)}/query-result`,
     sessionToken,
     { headers: ticketHeader(conversation) },
   );
@@ -98,7 +99,7 @@ export async function getVisualization(
   attachmentId: string,
 ): Promise<Blob> {
   const response = await fetch(
-    `${brokerBaseUrl}/api/genie/chat/conversations/${encodeURIComponent(conversation.id)}/messages/${encodeURIComponent(messageId)}/attachments/${encodeURIComponent(attachmentId)}/visualization`,
+    `${brokerBaseUrl}${conversationPath(conversation)}/messages/${encodeURIComponent(messageId)}/attachments/${encodeURIComponent(attachmentId)}/visualization`,
     {
       headers: { Authorization: `Bearer ${sessionToken}`, ...ticketHeader(conversation) },
       cache: "no-store",
@@ -112,12 +113,13 @@ export async function getVisualization(
 export async function streamResearch(
   brokerBaseUrl: string,
   sessionToken: string,
+  agentId: string,
   content: string,
   conversation: ConversationHandle | undefined,
   onEvent: (event: AgentStreamEvent) => void,
   signal?: AbortSignal,
 ): Promise<void> {
-  const response = await fetch(`${brokerBaseUrl}/api/genie/agent/responses`, {
+  const response = await fetch(`${brokerBaseUrl}${agentPath(agentId)}/research/responses`, {
     method: "POST",
     headers: {
       Authorization: `Bearer ${sessionToken}`,
@@ -164,6 +166,15 @@ async function request<T>(
   });
   if (!response.ok) throw await responseError(response);
   return response.json() as Promise<T>;
+}
+
+function agentPath(agentId: string): string {
+  return `/api/agents/${encodeURIComponent(agentId)}`;
+}
+
+// Chat conversations are addressed under the Agent that started them.
+function conversationPath(conversation: ConversationHandle): string {
+  return `${agentPath(conversation.agentId)}/chat/conversations/${encodeURIComponent(conversation.id)}`;
 }
 
 function ticketHeader(conversation: ConversationHandle): Record<string, string> {

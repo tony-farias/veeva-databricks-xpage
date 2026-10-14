@@ -1,8 +1,14 @@
 export type IdentityClaimSource = "user_name" | "federated_id";
 
+// Which Genie Agents a Veeva user may open: one fixed Agent for everyone, or the
+// rows a claim-scoped directory view returns for that user's identity claim.
+export type AgentSource =
+  | { kind: "fixed"; agentId: string }
+  | { kind: "directory"; view: string; warehouseId: string };
+
 export interface BrokerConfig {
   workspaceHost: string;
-  genieAgentId: string;
+  agentSource: AgentSource;
   veevaVaultOrigins: ReadonlySet<string>;
   veevaVaultApiVersion: string;
   identityClaimSource: IdentityClaimSource;
@@ -22,8 +28,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): BrokerConfig {
   const workspaceHost = normalizeHost(required(env, "DBX_WORKSPACE_HOST"));
   if (!/^[a-z0-9.-]+$/i.test(workspaceHost)) throw new Error("DBX_WORKSPACE_HOST is invalid");
 
-  const genieAgentId = required(env, "DBX_GENIE_AGENT_ID");
-  if (!/^[a-z0-9_-]{8,128}$/i.test(genieAgentId)) throw new Error("DBX_GENIE_AGENT_ID is invalid");
+  const agentSource = parseAgentSource(env);
 
   const veevaVaultOrigins = parseOrigins(required(env, "VEEVA_VAULT_ALLOWED_ORIGINS"), "VEEVA_VAULT_ALLOWED_ORIGINS");
   const veevaVaultApiVersion = required(env, "VEEVA_VAULT_API_VERSION");
@@ -64,7 +69,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): BrokerConfig {
 
   return {
     workspaceHost,
-    genieAgentId,
+    agentSource,
     veevaVaultOrigins,
     veevaVaultApiVersion,
     identityClaimSource,
@@ -79,6 +84,24 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): BrokerConfig {
     allowVeevaParentOrigins,
     port,
   };
+}
+
+function parseAgentSource(env: NodeJS.ProcessEnv): AgentSource {
+  const agentId = env.DBX_GENIE_AGENT_ID?.trim();
+  const view = env.GENIE_AGENT_DIRECTORY_VIEW?.trim();
+  if (agentId && view) throw new Error("Set DBX_GENIE_AGENT_ID or GENIE_AGENT_DIRECTORY_VIEW, not both");
+  if (agentId) {
+    if (!/^[a-z0-9_-]{8,128}$/i.test(agentId)) throw new Error("DBX_GENIE_AGENT_ID is invalid");
+    return { kind: "fixed", agentId };
+  }
+  if (!view) throw new Error("DBX_GENIE_AGENT_ID or GENIE_AGENT_DIRECTORY_VIEW is required");
+  // The view name is interpolated into SQL, so accept only a plain three-part name.
+  if (!/^[a-z0-9_]+\.[a-z0-9_]+\.[a-z0-9_]+$/i.test(view)) {
+    throw new Error("GENIE_AGENT_DIRECTORY_VIEW must be catalog.schema.view");
+  }
+  const warehouseId = required(env, "DBX_WAREHOUSE_ID");
+  if (!/^[a-z0-9]{8,64}$/i.test(warehouseId)) throw new Error("DBX_WAREHOUSE_ID is invalid");
+  return { kind: "directory", view, warehouseId };
 }
 
 function required(env: NodeJS.ProcessEnv, name: string): string {

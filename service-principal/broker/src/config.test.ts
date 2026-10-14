@@ -16,11 +16,48 @@ const baseEnv: NodeJS.ProcessEnv = {
 
 test("loads the fixed service-principal configuration", () => {
   const config = loadConfig(baseEnv);
-  assert.equal(config.genieAgentId, "01f1b7b1764a1a04adc67a648599a233");
+  assert.deepEqual(config.agentSource, { kind: "fixed", agentId: "01f1b7b1764a1a04adc67a648599a233" });
   assert.equal(config.servicePrincipalClientId, "service-principal-client-id");
   assert.equal(config.servicePrincipalDisplayName, "shared-genie-runtime");
   assert.equal(config.servicePrincipalOauthScope, "all-apis");
   assert.equal(config.brokerSessionTtlMs, 900_000);
+});
+
+test("reads Agents from a claim-scoped directory view when one is configured", () => {
+  const withoutAgent = { ...baseEnv, DBX_GENIE_AGENT_ID: undefined };
+  const config = loadConfig({
+    ...withoutAgent,
+    GENIE_AGENT_DIRECTORY_VIEW: "demo_catalog.genie_access.my_genie_agents",
+    DBX_WAREHOUSE_ID: "befedd56fadee1fa",
+  });
+  assert.deepEqual(config.agentSource, {
+    kind: "directory",
+    view: "demo_catalog.genie_access.my_genie_agents",
+    warehouseId: "befedd56fadee1fa",
+  });
+});
+
+test("requires exactly one Agent source", () => {
+  const withoutAgent = { ...baseEnv, DBX_GENIE_AGENT_ID: undefined };
+  assert.throws(() => loadConfig(withoutAgent), /DBX_GENIE_AGENT_ID or GENIE_AGENT_DIRECTORY_VIEW is required/);
+  assert.throws(
+    () => loadConfig({ ...baseEnv, GENIE_AGENT_DIRECTORY_VIEW: "a.b.c", DBX_WAREHOUSE_ID: "befedd56fadee1fa" }),
+    /not both/,
+  );
+});
+
+test("accepts only a plain three-part directory view name and a warehouse", () => {
+  const withoutAgent = { ...baseEnv, DBX_GENIE_AGENT_ID: undefined };
+  for (const view of ["genie_access.my_genie_agents", "a.b.c; DROP TABLE x", "`a`.b.c"]) {
+    assert.throws(
+      () => loadConfig({ ...withoutAgent, GENIE_AGENT_DIRECTORY_VIEW: view, DBX_WAREHOUSE_ID: "befedd56fadee1fa" }),
+      /catalog\.schema\.view/,
+    );
+  }
+  assert.throws(
+    () => loadConfig({ ...withoutAgent, GENIE_AGENT_DIRECTORY_VIEW: "a.b.c" }),
+    /DBX_WAREHOUSE_ID is required/,
+  );
 });
 
 test("derives identity claims from the Vault username by default", () => {

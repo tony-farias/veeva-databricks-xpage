@@ -3,11 +3,8 @@ import type { GenieXPageConfig, ResolvedGenieXPageConfig } from "../types/config
 const defaults: ResolvedGenieXPageConfig = {
   workspaceHost: "",
   workspaceOrgId: "",
-  genieAgentId: "",
   authBrokerBaseUrl: "",
   defaultMode: "chat",
-  displayName: "NSCLC RWE · HEOR Cohort Explorer",
-  contextLabel: "Synthetic clinical data · rows scoped to your Veeva identity",
 };
 
 export function getConfig(): ResolvedGenieXPageConfig {
@@ -24,16 +21,15 @@ export function configProblems(config: ResolvedGenieXPageConfig): string[] {
   const problems: string[] = [];
   if (!config.workspaceHost) problems.push("workspaceHost is missing");
   if (!config.workspaceOrgId) problems.push("workspaceOrgId is missing");
-  if (!config.genieAgentId) problems.push("genieAgentId is missing");
   if (!isUsableBrokerUrl(config.authBrokerBaseUrl)) {
     problems.push("authBrokerBaseUrl is missing or still contains REPLACE-ME");
   }
   return problems;
 }
 
-export function genieWorkspaceUrl(config: ResolvedGenieXPageConfig): string {
+export function genieWorkspaceUrl(config: ResolvedGenieXPageConfig, agentId: string): string {
   const query = new URLSearchParams({ o: config.workspaceOrgId });
-  return `https://${config.workspaceHost}/genie/rooms/${encodeURIComponent(config.genieAgentId)}?${query}`;
+  return `https://${config.workspaceHost}/genie/rooms/${encodeURIComponent(agentId)}?${query}`;
 }
 
 function normalizeHost(value: string): string {

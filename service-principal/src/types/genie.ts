@@ -14,6 +14,14 @@ export interface DataScope {
   identityClaim: string;
 }
 
+// A Genie Agent this user may open. The title and description come from the
+// Genie space; which Agents appear comes from the user's Veeva roles.
+export interface GenieAgent {
+  id: string;
+  title: string;
+  description: string | null;
+}
+
 export interface BrokerSession {
   sessionToken: string;
   expiresAt: string;
@@ -21,11 +29,13 @@ export interface BrokerSession {
   user: BrokerUser;
   executionIdentity: ExecutionIdentity;
   dataScope: DataScope;
+  agents: GenieAgent[];
 }
 
-// The broker binds each Genie conversation to the identity claim that started
-// it. Every follow-up call must present the ticket it issued.
+// The broker binds each Genie conversation to the Agent and identity claim that
+// started it. Every follow-up call must present the ticket it issued.
 export interface ConversationHandle {
+  agentId: string;
   id: string;
   ticket: string;
 }

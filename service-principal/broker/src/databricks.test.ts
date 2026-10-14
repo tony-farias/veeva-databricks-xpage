@@ -5,7 +5,7 @@ import { clearIdentityCachesForTests, getServicePrincipalIdentity } from "./data
 
 const baseConfig: BrokerConfig = {
   workspaceHost: "workspace.example.com",
-  genieAgentId: "01f1b7b1764a1a04adc67a648599a233",
+  agentSource: { kind: "fixed", agentId: "01f1b7b1764a1a04adc67a648599a233" },
   veevaVaultOrigins: new Set(["https://vault.example.com"]),
   veevaVaultApiVersion: "v26.1",
   identityClaimSource: "user_name",

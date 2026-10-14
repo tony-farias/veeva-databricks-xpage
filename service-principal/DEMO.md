@@ -19,6 +19,8 @@ Vault CRM X-Page (React/TypeScript)
   -> Azure broker validates the session with Vault `/objects/users/me`
   -> Databricks OAuth M2M token for the fixed service principal, carrying the
      Veeva user's identity claim
+  -> Claim-scoped directory view lists the Genie Agents the user's Veeva roles include
+  -> Agent selector in the X-Page (skipped when the user has one Agent)
   -> Azure Databricks Genie Agent
   -> Claim-scoped view over the Unity Catalog synthetic NSCLC patient table
 ```
@@ -39,7 +41,8 @@ Follow `PRODUCT.md` and `DESIGN.md`. The experience is intentionally close to Ge
 ## Deployment targets
 
 - Target workspace: `adb-7405608383447105.5.azuredatabricks.net`
-- Genie Agent: `01f1c1bc36b518d7b7a59b21c1bd3b92`
+- Genie Agents: `01f1c1bc36b518d7b7a59b21c1bd3b92` (HEOR Cohort Explorer), `01f1c81534111e01b8b3957dbc9cc314` (Field Medical Biomarker Explorer)
+- Agent directory view: `af_vault_genie_demo.genie_access.my_genie_agents`
 - Service principal: `veeva-xpage-genie-shared`
 - Broker: `af-vault-genie-sp-eus2-20260929.azurewebsites.net`
 - X-Page content package: `artifacts/vault-crm-genie-service-principal-xpage.zip`

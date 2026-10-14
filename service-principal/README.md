@@ -2,7 +2,7 @@
 
 This directory is a complete, independent alternative to the per-user federation implementation at the repository root. It includes its own React X-Page, broker, dependencies, tests, build scripts, package, and deployment configuration.
 
-Veeva still authenticates the human user. On iPad and iPhone, the X-Page reuses the active native Vault session without opening a login screen. Databricks calls use one fixed workspace service principal, so every user shares its Genie Agent and Unity Catalog grants. Each token also carries an OAuth identity claim for the verified Veeva user, and claim-scoped views limit the rows that user can see.
+Veeva still authenticates the human user. On iPad and iPhone, the X-Page reuses the active native Vault session without opening a login screen. Databricks calls use one fixed workspace service principal, so every user shares its Unity Catalog grants. Each token also carries an OAuth identity claim for the verified Veeva user. A claim-scoped directory view decides which Genie Agents that user's Veeva roles include, and claim-scoped data views limit the rows the user sees inside each Agent.
 
 ## Identity flow
 
@@ -15,12 +15,13 @@ Independent service-principal broker
         |  1. validates the session with the allowlisted Vault `/objects/users/me` API
         |  2. derives the identity claim (Vault username or Federated ID)
         |  3. obtains a Databricks OAuth M2M token carrying that claim
-        |  4. binds each Genie conversation to the claim with a signed ticket
-        |  5. correlates the Veeva actor in structured audit logs
+        |  4. reads the user's Genie Agents from a claim-scoped directory view
+        |  5. binds each Genie conversation to its Agent and claim with a signed ticket
+        |  6. correlates the Veeva actor in structured audit logs
         v
 Fixed Databricks service principal + identity claim
         |
-        +--> Genie Agent chat and Agent mode APIs
+        +--> chat and Agent mode APIs of the Genie Agent the user selected
         +--> query-result and visualization APIs
         +--> claim-scoped views: rows filtered by current_oauth_custom_identity_claim()
 ```
@@ -39,12 +40,31 @@ The broker binds each conversation to the claim that started it:
 - Every later call — follow-up messages, query results, visualizations, and Agent-mode items — must present that ticket in the `X-Conversation-Ticket` header. A ticket verifies only for the same Agent, conversation, and claim; a ticket from another user's session is rejected with HTTP 403.
 - Tickets and the broker session are self-contained (signed/encrypted), so the broker holds no per-conversation server state and can run as more than one instance.
 
+## Choosing a Genie Agent by Veeva role
+
+Each Veeva user sees only the Genie Agents their Veeva roles include. Genie space permissions cannot express this, because every user reaches Databricks as the same service principal. The decision is therefore keyed on the identity claim, like row scoping:
+
+| Object | Purpose | Service principal access |
+| --- | --- | --- |
+| `genie_access.user_roles` | Identity claim to Veeva role; in production, synced from Vault CRM group membership | None |
+| `genie_access.role_agents` | Veeva role to Genie Agent IDs, maintained on the Databricks side | None |
+| `genie_access.my_genie_agents` | Claim-scoped view: the caller's Agent IDs, matched on `current_oauth_custom_identity_claim()` | `SELECT` |
+
+When a broker session starts, the broker queries `my_genie_agents` with the user's claim-bearing token and labels each Agent with its Genie space title and description. It leaves out any Agent the service principal cannot open, seals the remaining Agent IDs into the encrypted session, and returns the list to the X-Page.
+
+- With several Agents, the X-Page shows a selector and marks the one last used. With one, it opens that Agent directly. With none, it explains that no Veeva role grants an Agent.
+- Every Genie route names its Agent (`/api/agents/{agentId}/chat/...` and `/api/agents/{agentId}/research/...`). The broker refuses any Agent missing from the sealed session with HTTP 403 `agent_not_entitled`. The selector is presentation only.
+- Conversation tickets name the Agent, so a conversation cannot be continued on a different Agent.
+- The directory is read again for every broker session, so removing a role takes effect within one session lifetime (15 minutes by default). The X-Page closes an open Agent that disappears from a renewed session.
+- Inside every Agent, rows are still limited by the claim-scoped data views. Removing the Agent layer would not widen row access.
+
 ## Configured demo resources
 
 | Resource | Value |
 | --- | --- |
 | Workspace | `adb-7405608383447105.5.azuredatabricks.net` |
-| Genie Agent | `01f1c1bc36b518d7b7a59b21c1bd3b92` (claim-scoped) |
+| Genie Agents | `01f1c1bc36b518d7b7a59b21c1bd3b92` (HEOR Cohort Explorer), `01f1c81534111e01b8b3957dbc9cc314` (Field Medical Biomarker Explorer); both claim-scoped |
+| Agent directory view | `af_vault_genie_demo.genie_access.my_genie_agents` |
 | SQL warehouse | `befedd56fadee1fa` |
 | Service principal | `veeva-xpage-genie-shared` |
 | Application ID | `6d18456b-9dba-4ca9-9e65-d2843df4dd7a` |
@@ -52,26 +72,27 @@ The broker binds each conversation to the claim that started it:
 | Claim-scoped view | `af_vault_genie_demo.nsclc_rwe_scoped.gold_patient_master_scoped` |
 | Identity claim source | `federated_id` (`antonio.farias@databricks.com`) |
 | Demo entitlements | `antonio.farias@databricks.com` → `SITE-0001` (13 patients); `demo.msl.west@example.com` → `SITE-0002`, `SITE-0003` (26 patients) |
+| Demo roles | `antonio.farias@databricks.com` → `heor_analyst`, `field_medical` (both Agents); `demo.msl.west@example.com` → `field_medical` (one Agent) |
 
-The project grants the service principal workspace access, Databricks SQL entitlement, `CAN_RUN` on the Genie Agent, `CAN_USE` on the warehouse, and the required Unity Catalog `USE` and `SELECT` privileges. Row scoping takes effect once the Genie Agent references only the claim-scoped view and the service principal loses direct access to the curated table; see [Row scoping with identity claims](#row-scoping-with-identity-claims).
+The project grants the service principal workspace access, Databricks SQL entitlement, `CAN_RUN` on each Genie Agent, `CAN_USE` on the warehouse, and the required Unity Catalog `USE` and `SELECT` privileges. Row scoping takes effect once the Genie Agent references only the claim-scoped view and the service principal loses direct access to the curated table; see [Row scoping with identity claims](#row-scoping-with-identity-claims).
 
 > Sandbox caveat: this Azure Databricks account currently grants `account_admin` indirectly to its built-in account `users` group. The demo service principal therefore inherits broader account authority even though this project adds only the scoped permissions above. Do not reproduce that group role in a customer environment; remove it from the built-in group or use an account where default principals are not administrators before treating this as a least-privilege production deployment.
 
-## Repointing to another workspace or Genie Agent
+## Repointing to another workspace or Genie Agents
 
-Nothing is hard-coded in source — the workspace and Genie Agent are read from configuration at runtime. There are two config files because there are two deployables, and the split is deliberate: **the browser file must never contain a secret.**
+Nothing is hard-coded in source — the workspace and Genie Agents are read from configuration at runtime. There are two config files because there are two deployables, and the split is deliberate: **the browser file must never contain a secret.**
 
 | What to change | Browser — `public/xpage-config.js` | Broker — `.env` locally, or App Service application settings |
 | --- | --- | --- |
 | Workspace | `workspaceHost`, `workspaceOrgId` | `DBX_WORKSPACE_HOST` |
-| Genie Agent | `genieAgentId` | `DBX_GENIE_AGENT_ID` |
+| Genie Agents by Veeva role | — | `GENIE_AGENT_DIRECTORY_VIEW` and `DBX_WAREHOUSE_ID` |
+| One Genie Agent for every user | — | `DBX_GENIE_AGENT_ID` (instead of the directory view) |
 | Broker URL | `authBrokerBaseUrl` | — |
 | Vault instance | — | `VEEVA_VAULT_ALLOWED_ORIGINS` |
 | X-Page origin allowlist | — | `ALLOWED_PARENT_ORIGINS` |
 | Identity claim source | — | `IDENTITY_CLAIM_SOURCE` (`user_name` or `federated_id`) |
-| Header and context labels (cosmetic) | `displayName`, `contextLabel` | — |
 
-`workspaceHost` / `DBX_WORKSPACE_HOST` and `genieAgentId` / `DBX_GENIE_AGENT_ID` must match across the two files. Only the broker file holds secrets (`DBX_SP_CLIENT_SECRET`, `STATE_ENCRYPTION_SECRET`); never place those in `public/xpage-config.js`, which ships to the browser.
+`workspaceHost` / `DBX_WORKSPACE_HOST` must match across the two files. The X-Page has no Agent setting: it shows the Agents the broker lists, titled by their Genie spaces. Only the broker file holds secrets (`DBX_SP_CLIENT_SECRET`, `STATE_ENCRYPTION_SECRET`); never place those in `public/xpage-config.js`, which ships to the browser.
 
 To hand this to someone or point it at a new environment:
 
@@ -143,8 +164,15 @@ Set up the demo in this order:
    ```
 
    The script grants the runtime service principal `SELECT` on the view and hands ownership to `VIEW_OWNER`. Revoke the administration grants afterwards. To change the view later, transfer its ownership back to the administration service principal first.
-3. Create a Genie Agent whose only table is the claim-scoped view, grant the runtime service principal `CAN_RUN`, and set `DBX_GENIE_AGENT_ID`. Leave prompt matching off for scoped columns, because value indexes are built outside any user's claim.
-4. Cut over by revoking the runtime service principal's direct access to the curated table:
+3. Create each Genie Agent so its only tables are claim-scoped views, and grant the runtime service principal `CAN_RUN` on it. Leave prompt matching off for scoped columns, because value indexes are built outside any user's claim.
+4. Run `ops/create_genie_agent_directory.sql` as a catalog administrator. It creates the role tables, the demo roles, and the runtime service principal's `USE SCHEMA` grant. Then create the directory view the same way as step 2: give the administration service principal `CREATE TABLE` on `af_vault_genie_demo.genie_access` and `SELECT` on `user_roles` and `role_agents`, and run
+
+   ```bash
+   node ops/apply-claim-scoped-view.mjs ops/genie_agent_directory_view.sql
+   ```
+
+   with the same environment variables. Set `GENIE_AGENT_DIRECTORY_VIEW=af_vault_genie_demo.genie_access.my_genie_agents` and `DBX_WAREHOUSE_ID` on the broker.
+5. Cut over by revoking the runtime service principal's direct access to the curated table:
 
    ```sql
    REVOKE SELECT ON TABLE af_vault_genie_demo.nsclc_rwe.gold_patient_master FROM `6d18456b-9dba-4ca9-9e65-d2843df4dd7a`;
@@ -160,7 +188,7 @@ Operational consequences:
 
 Databricks sees the fixed service principal as the caller. Therefore:
 
-- All X-Page users share its catalog, schema, warehouse, and Genie Agent grants.
+- All X-Page users share its catalog, schema, warehouse, and Genie Agent grants. The directory view narrows which Agents each user can open through the broker.
 - Claim-scoped views limit rows to the entitlements of each user's identity claim. Unity Catalog row filters, column masks, and group checks keyed on `current_user()` still evaluate the service principal.
 - Databricks query history and audit logs identify the service principal and do not record the claim.
 - Structured broker logs correlate the Veeva user, identity claim, broker session, service principal, Genie Agent, conversation, message, attachment, and statement identifiers.

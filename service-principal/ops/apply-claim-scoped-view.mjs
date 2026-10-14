@@ -1,4 +1,5 @@
-// Creates the claim-scoped view defined in claim_scoped_view.sql.
+// Creates a claim-scoped view from a SQL file: claim_scoped_view.sql by default,
+// or the file named as the first argument, such as genie_agent_directory_view.sql.
 //
 // Databricks evaluates current_oauth_custom_identity_claim() while creating any
 // object that references it, so a SQL editor session cannot create the view.
@@ -9,7 +10,6 @@ import { readFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
-const VIEW = "af_vault_genie_demo.nsclc_rwe_scoped.gold_patient_master_scoped";
 const env = readEnv([
   "DBX_WORKSPACE_HOST",
   "DBX_WAREHOUSE_ID",
@@ -23,12 +23,14 @@ for (const name of ["DBX_RUNTIME_SP_APPLICATION_ID", "VIEW_OWNER"]) {
   if (!/^[\w.@-]{1,256}$/.test(env[name])) throw new Error(`${name} is not a valid principal name`);
 }
 
-const sqlFile = path.join(path.dirname(fileURLToPath(import.meta.url)), "claim_scoped_view.sql");
+const sqlFile = path.resolve(process.argv[2] ?? path.join(path.dirname(fileURLToPath(import.meta.url)), "claim_scoped_view.sql"));
 const definition = (await readFile(sqlFile, "utf8"))
   .split("\n")
   .filter((line) => !line.trimStart().startsWith("--"))
   .join("\n")
   .trim();
+const VIEW = definition.match(/^CREATE\s+OR\s+REPLACE\s+VIEW\s+([\w]+\.[\w]+\.[\w]+)\s/i)?.[1];
+if (!VIEW) throw new Error(`${sqlFile} must start with CREATE OR REPLACE VIEW catalog.schema.view`);
 
 const token = await mintClaimToken();
 await run(definition);
