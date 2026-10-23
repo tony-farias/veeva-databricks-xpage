@@ -5,7 +5,7 @@
   "type": "module",
   "main": "dist/functions/broker.js",
   "engines": {
-    "node": ">=20"
+    "node": ">=22 <25"
   },
   "scripts": {
     "dev": "tsx watch src/server.ts",

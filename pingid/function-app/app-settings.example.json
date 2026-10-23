@@ -1,0 +1,17 @@
+{
+  "FUNCTIONS_WORKER_RUNTIME": "node",
+  "FUNCTIONS_EXTENSION_VERSION": "~4",
+  "BROKER_FUNCTION_AUTH_LEVEL": "function",
+  "BROKER_FUNCTION_ROUTE_PREFIX": "",
+  "DBX_WORKSPACE_HOST": "REPLACE-ME.azuredatabricks.net",
+  "DBX_GENIE_AGENT_ID": "REPLACE-ME",
+  "DBX_SP_CLIENT_ID": "REPLACE-ME",
+  "DBX_SP_CLIENT_SECRET": "@Microsoft.KeyVault(SecretUri=https://REPLACE-ME.vault.azure.net/secrets/veeva-genie-dbx-secret/)",
+  "DBX_SP_DISPLAY_NAME": "veeva-xpage-genie-shared",
+  "DBX_SP_OAUTH_SCOPE": "genie",
+  "IDENTITY_CLAIM_NAME": "sub",
+  "STATE_ENCRYPTION_SECRET": "@Microsoft.KeyVault(SecretUri=https://REPLACE-ME.vault.azure.net/secrets/veeva-genie-state-secret/)",
+  "ALLOWED_PARENT_ORIGINS": "https://REPLACE-ME.example.com",
+  "ALLOW_OPAQUE_PARENT_ORIGIN": "false",
+  "ALLOW_VEEVA_PARENT_ORIGINS": "false"
+}

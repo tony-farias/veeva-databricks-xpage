@@ -76,7 +76,7 @@ This variant's broker is **not deployed**; `public/xpage-config.js` ships with `
 
 ## Repointing to another workspace, Genie Agent, or claim name
 
-Nothing is hard-coded in source. There are two config files because there are two deployables, and the split is deliberate: **the browser file must never contain a secret.** The broker runs on App Service or a container (`broker/Dockerfile`) or on an Azure Function App (`broker/host.json`, see [Host on Azure Functions](broker/README.md#host-on-azure-functions)).
+Nothing is hard-coded in source. There are two config files because there are two deployables, and the split is deliberate: **the browser file must never contain a secret.** The broker runs on App Service or a container (`function-app/Dockerfile`) or on an Azure Function App (`function-app/host.json`, see [Host on Azure Functions](function-app/README.md#host-on-azure-functions)).
 
 | What to change | Browser — `public/xpage-config.js` | Broker — `.env` locally, or App Service / Function App settings |
 | --- | --- | --- |
@@ -124,7 +124,7 @@ Choose this variant when reps are authenticated through Ping Federate and a gate
 
 The broker trusts Kong to authenticate the Ping bearer token. It must therefore be reachable only through Kong — not directly from the public internet — because it does not re-verify the token signature, issuer, or audience. The identity claim is derived only from the forwarded token, never from other browser input. The service-principal secret controls both Databricks access and, through the claim, row access; keep it in a secret manager and rotate it.
 
-If you prefer the broker to verify the Ping token itself (issuer, audience, signature via Ping's JWKS) rather than trust Kong, that is a localized change in `broker/src/pingIdentity.ts` — add JWKS-based verification before reading the claim.
+If you prefer the broker to verify the Ping token itself (issuer, audience, signature via Ping's JWKS) rather than trust Kong, that is a localized change in `function-app/src/pingIdentity.ts` — add JWKS-based verification before reading the claim.
 
 ## References
 

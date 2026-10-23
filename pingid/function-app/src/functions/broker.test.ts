@@ -34,6 +34,26 @@ test("forwards a GET to the Express app and returns its status, headers, and bod
   });
 });
 
+test("uses the captured route below an existing Function App prefix", async () => {
+  const response = await forwardToBroker(new HttpRequest({
+    method: "GET",
+    url: "https://broker.example.com/api/veeva-genie/health?probe=1",
+    params: { path: "health" },
+  }));
+  assert.equal(response.status, 200);
+  assert.equal(JSON.parse(await bodyText(response)).ok, true);
+});
+
+test("preserves broker authentication below a Function App prefix", async () => {
+  const response = await forwardToBroker(new HttpRequest({
+    method: "POST",
+    url: "https://broker.example.com/api/veeva-genie/api/session",
+    params: { path: "api/session" },
+  }));
+  assert.equal(response.status, 401);
+  assert.deepEqual(JSON.parse(await bodyText(response)), { error: "missing_bearer_token" });
+});
+
 test("forwards the Authorization header so the broker can reject a missing or expired Ping token", async () => {
   const missing = await forwardToBroker(new HttpRequest({ method: "POST", url: "https://broker.example.com/api/session" }));
   assert.equal(missing.status, 401);
