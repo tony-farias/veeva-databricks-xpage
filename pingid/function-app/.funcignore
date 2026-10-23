@@ -9,3 +9,8 @@ local.settings.example.json
 README.md
 src/
 tsconfig.json
+
+app-settings*.json
+DEPLOYMENT.md
+scripts/
+artifacts/

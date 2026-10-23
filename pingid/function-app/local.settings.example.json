@@ -9,11 +9,12 @@
     "DBX_SP_CLIENT_ID": "<service-principal-application-id>",
     "DBX_SP_CLIENT_SECRET": "<service-principal-oauth-secret>",
     "DBX_SP_DISPLAY_NAME": "veeva-xpage-genie-shared",
-    "DBX_SP_OAUTH_SCOPE": "all-apis",
+    "DBX_SP_OAUTH_SCOPE": "genie",
     "IDENTITY_CLAIM_NAME": "sub",
     "STATE_ENCRYPTION_SECRET": "<at least 32 random bytes, e.g. openssl rand -base64 48>",
     "ALLOWED_PARENT_ORIGINS": "https://your-gateway-origin.example.com",
     "ALLOW_OPAQUE_PARENT_ORIGIN": "false",
-    "ALLOW_VEEVA_PARENT_ORIGINS": "false"
+    "ALLOW_VEEVA_PARENT_ORIGINS": "false",
+    "BROKER_FUNCTION_ROUTE_PREFIX": ""
   }
 }

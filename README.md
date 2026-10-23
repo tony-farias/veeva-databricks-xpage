@@ -50,12 +50,13 @@ The browser never receives the Databricks access token. The broker returns an en
 
 ## Choose an identity model
 
-This repository now contains two complete X-Page implementations so a customer can choose the authorization model that fits its requirements:
+This repository now contains three complete X-Page implementations so a customer can choose the authorization model that fits its requirements:
 
 | Implementation | Databricks caller | Best fit |
 | --- | --- | --- |
 | Repository root | Individual Veeva/Okta/Entra user | Preserve each user's Unity Catalog permissions, row filters, column masks, and Databricks audit identity |
 | [`service-principal/`](service-principal/) | Fixed workspace service principal | Give all X-Page users one deliberately curated data boundary without provisioning each user in Databricks |
+| [`pingid/`](pingid/) | Fixed workspace service principal, with Ping identity validated by Kong | Use the existing Ping/Kong sign-in path and Azure Function App |
 
 The service-principal implementation is independent: it has its own React application, broker, dependencies, build scripts, documentation, and deployment configuration. Databricks records the shared service principal for those requests, while the broker maintains a compensating audit correlation to the verified Veeva user.
 
@@ -65,7 +66,9 @@ The service-principal implementation is independent: it has its own React applic
 src/                         X-Page React application
 public/xpage-config.js       Non-secret X-Page runtime configuration
 broker/                      Authentication and Databricks API broker
-service-principal/            Independent fixed-service-principal alternative
+service-principal/           Independent fixed-service-principal alternative
+pingid/                      Ping/Kong X-Page
+pingid/function-app/         Ping/Kong Azure Function App backend
 ops/                         Synthetic-data and demo SQL
 scripts/                     X-Page build and packaging scripts
 PRODUCT.md                   Product and UX context
@@ -83,6 +86,10 @@ DEMO.md                      Demonstration guide
 - A Genie Agent shared with the intended users
 - A SQL warehouse and Unity Catalog data accessible to those users
 - An HTTPS host for the broker
+
+## Ping/Kong Function App deployment
+
+For the Ping/Kong integration, the Azure backend is in [`pingid/function-app/`](pingid/function-app/). Its [deployment guide](pingid/function-app/DEPLOYMENT.md) covers updating an existing Function App, setting secrets, and connecting Kong. The Ping X-Page remains in `pingid/`.
 
 ## Configure the X-Page
 

@@ -56,7 +56,12 @@ function startBroker(): Promise<string> {
 
 export async function forwardToBroker(request: HttpRequest): Promise<HttpResponseInit> {
   const origin = await startBroker();
-  const { pathname, search } = new URL(request.url);
+  const url = new URL(request.url);
+  // The captured path excludes the Functions host/route prefix. This lets an
+  // existing app retain its other routes while mounting this broker below one
+  // path, for example /api/veeva-genie/api/session.
+  const pathname = request.params.path === undefined ? url.pathname : `/${request.params.path}`;
+  const { search } = url;
   const headers = new Headers();
   request.headers.forEach((value, name) => {
     if (!HOP_HEADERS.has(name.toLowerCase())) headers.set(name, value);
@@ -76,8 +81,13 @@ export async function forwardToBroker(request: HttpRequest): Promise<HttpRespons
   return { status: upstream.status, headers: responseHeaders, body: upstream.body ?? undefined };
 }
 
-app.http("broker", {
-  route: "{*path}",
+const routePrefix = (process.env.BROKER_FUNCTION_ROUTE_PREFIX ?? "").replace(/^\/+|\/+$/g, "");
+if (routePrefix && !/^[a-z0-9_-]+(?:\/[a-z0-9_-]+)*$/i.test(routePrefix)) {
+  throw new Error("BROKER_FUNCTION_ROUTE_PREFIX must contain plain path segments");
+}
+
+app.http("veevaGenieBroker", {
+  route: routePrefix ? `${routePrefix}/{*path}` : "{*path}",
   methods: ["GET", "POST", "OPTIONS"],
   authLevel: process.env.BROKER_FUNCTION_AUTH_LEVEL === "anonymous" ? "anonymous" : "function",
   handler: forwardToBroker,
